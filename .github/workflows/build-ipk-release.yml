@@ -83,7 +83,8 @@ jobs:
           out_dir="${{ runner.temp }}/publish/${{ matrix.rid }}"
           mkdir -p "${out_dir}"
           docker run --rm \
-            --user "$(id -u):$(id -g)" \
+            -e HOST_UID="$(id -u)" \
+            -e HOST_GID="$(id -g)" \
             -v "${GITHUB_WORKSPACE}":/src \
             -v "${out_dir}":/out \
             -w /src \
@@ -99,6 +100,7 @@ jobs:
                 -p:LinkerFlavor=lld \
                 -o /out \
                 -v minimal
+              chown -R "$HOST_UID:$HOST_GID" /out
             '
 
       - name: Verify musl binary interpreter
