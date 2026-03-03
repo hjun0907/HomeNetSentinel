@@ -24,19 +24,18 @@ jobs:
         run: |
           chmod +x build_ipk.sh
 
-      - name: Build AOT for MT7621
+      - name: Build for MT7621 (no AOT)
         run: |
           BUILD_ROOT="$HOME/.build/HomeNetSentinel"
           mkdir -p "$BUILD_ROOT/out-musl"
 
-          # 这里是关键！！！
           dotnet publish HomeNetSentinel/HomeNetSentinel.csproj \
             -c Release \
-            -r linux-musl-mips32 \
-            -p:PublishAot=true \
+            -r linux-musl-mipsel \
             -p:SelfContained=true \
-            -o "$BUILD_ROOT/out-musl" \
-            -v minimal
+            -p:PublishAot=false \
+            -p:UseMipsMusl=true \
+            -o "$BUILD_ROOT/out-musl"
 
           ls -lh "$BUILD_ROOT/out-musl"
 
