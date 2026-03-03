@@ -24,15 +24,15 @@ jobs:
         run: |
           chmod +x build_ipk.sh
 
-      # 直接用你真实的路径
       - name: Build AOT for MT7621
         run: |
           BUILD_ROOT="$HOME/.build/HomeNetSentinel"
           mkdir -p "$BUILD_ROOT/out-musl"
 
+          # 这里是关键！！！
           dotnet publish HomeNetSentinel/HomeNetSentinel.csproj \
             -c Release \
-            -r linux-musl-mipsel \
+            -r linux-musl-mips32 \
             -p:PublishAot=true \
             -p:SelfContained=true \
             -o "$BUILD_ROOT/out-musl" \
@@ -60,3 +60,4 @@ jobs:
         with:
           name: mt7621-ipk
           path: $HOME/.build/ipk/*.ipk
+
