@@ -1,4 +1,3 @@
-
 name: Build HomeNetSentinel MT7621 IPK
 
 on:
@@ -14,20 +13,21 @@ jobs:
       - name: Chmod scripts
         run: chmod +x build_ipk.sh
 
-      # 随便建一个空的占位文件，让 build_ipk.sh 能跑通
+      # 生成占位二进制（跳过 .NET MIPS 编译，因为官方不支持）
       - name: Create dummy binary
         run: |
           mkdir -p $HOME/.build/HomeNetSentinel/out-musl
           echo "#dummy" > $HOME/.build/HomeNetSentinel/out-musl/HomeNetSentinel
           chmod +x $HOME/.build/HomeNetSentinel/out-musl/HomeNetSentinel
 
-      - name: Download MT7621 SDK
+      # 改用 24.10.1 + 浙大镜像（100% 可下）
+      - name: Download MT7621 SDK (fixed)
         run: |
-          wget -O sdk.tar.xz https://downloads.immortalwrt.org/releases/24.10.2/targets/ramips/mt7621/immortalwrt-sdk-24.10.2-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64.tar.xz
-          tar -xf sdk.tar.xz -C $HOME/
-          mv $HOME/immortalwrt-sdk-24.10.2-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64 $HOME/immortalwrt-sdk-mt7621
+          wget -O sdk.tar.zst https://mirror.zju.edu.cn/immortalwrt/releases/24.10.1/targets/ramips/mt7621/immortalwrt-sdk-24.10.1-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+          tar -xf sdk.tar.zst -C $HOME/
+          mv $HOME/immortalwrt-sdk-24.10.1-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64 $HOME/immortalwrt-sdk-mt7621
 
-      # 直接打包！生成正确的 IPK 结构
+      # 打包 IPK（结构正确，后续替换二进制即可）
       - name: Build IPK
         run: |
           ./build_ipk.sh \
@@ -42,3 +42,4 @@ jobs:
         with:
           name: mt7621-ipk
           path: $HOME/.build/ipk/*.ipk
+
