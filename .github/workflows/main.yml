@@ -1,0 +1,66 @@
+name: Build HomeNetSentinel MT7621 IPK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential gcc-mipsel-linux-gnu
+
+      - name: Chmod scripts
+        run: |
+          chmod +x build-aot.sh build_ipk.sh
+
+      # =========================
+      # 1. 编译 .NET AOT for MT7621
+      # =========================
+      - name: Build AOT
+        run: |
+          ./build-aot.sh \
+            . \
+            HomeNetSentinel.csproj \
+            linux-musl-mipsel \
+            $HOME/.build/HomeNetSentinel
+
+      # =========================
+      # 2. 下载 MT7621 SDK
+      # =========================
+      - name: Download MT7621 SDK
+        run: |
+          wget -O sdk.tar.xz https://downloads.immortalwrt.org/releases/24.10.2/targets/ramips/mt7621/immortalwrt-sdk-24.10.2-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64.tar.xz
+          tar -xf sdk.tar.xz -C $HOME/
+          mv $HOME/immortalwrt-sdk-24.10.2-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64 $HOME/immortalwrt-sdk-mt7621
+
+      # =========================
+      # 3. 打包 IPK（MT7621 专用）
+      # =========================
+      - name: Build IPK
+        run: |
+          ./build_ipk.sh \
+            --bin "$HOME/.build/HomeNetSentinel/out-musl/HomeNetSentinel" \
+            --arch mipsel_24kc \
+            --version 1.0.0-0 \
+            --output "$HOME/.build/ipk" \
+            --ipkg-build "$HOME/immortalwrt-sdk-mt7621/scripts/ipkg-build"
+
+      # =========================
+      # 4. 上传成品
+      # =========================
+      - name: Upload IPK
+        uses: actions/upload-artifact@v4
+        with:
+          name: mt7621-ipk
+          path: $HOME/.build/ipk/*.ipk
