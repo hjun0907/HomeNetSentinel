@@ -10,34 +10,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y build-essential gcc-mipsel-linux-gnu
+      # 必须启动 Docker，你脚本要用到
+      - name: Start Docker
+        run: sudo systemctl start docker
 
       - name: Chmod scripts
+        run: chmod +x build-aot.sh build_ipk.sh
+
+      # 直接用你自己的编译脚本！！！
+      - name: Build AOT with your script
         run: |
-          chmod +x build_ipk.sh
-
-      - name: Build for MT7621 (no AOT)
-        run: |
-          BUILD_ROOT="$HOME/.build/HomeNetSentinel"
-          mkdir -p "$BUILD_ROOT/out-musl"
-
-          dotnet publish HomeNetSentinel/HomeNetSentinel.csproj \
-            -c Release \
-            -r linux-musl-mipsel \
-            -p:SelfContained=true \
-            -p:PublishAot=false \
-            -p:UseMipsMusl=true \
-            -o "$BUILD_ROOT/out-musl"
-
-          ls -lh "$BUILD_ROOT/out-musl"
+          ./build-aot.sh \
+            "$(pwd)" \
+            HomeNetSentinel.csproj \
+            linux-musl-mipsel \
+            $HOME/.build/HomeNetSentinel
 
       - name: Download MT7621 SDK
         run: |
@@ -45,6 +32,7 @@ jobs:
           tar -xf sdk.tar.xz -C $HOME/
           mv $HOME/immortalwrt-sdk-24.10.2-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64 $HOME/immortalwrt-sdk-mt7621
 
+      # 打包 IPK
       - name: Build IPK
         run: |
           ./build_ipk.sh \
@@ -59,4 +47,3 @@ jobs:
         with:
           name: mt7621-ipk
           path: $HOME/.build/ipk/*.ipk
-
