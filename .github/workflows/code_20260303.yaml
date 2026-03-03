@@ -1,3 +1,4 @@
+
 name: Build HomeNetSentinel MT7621 IPK
 
 on:
@@ -10,49 +11,65 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ========== 修复点 1: 必须启动 Docker 服务 ==========
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
 
-      - name: Install dependencies
+      - name: Install System Dependencies
         run: |
           sudo apt update
           sudo apt install -y build-essential gcc-mipsel-linux-gnu
 
-      - name: Chmod scripts
+      - name: Fix Script Permissions
         run: |
           chmod +x build-aot.sh build_ipk.sh
+          ls -la build*.sh
 
-      # 1. 编译 AOT for MT7621
-      - name: Build AOT
+      # ========== 修复点 2: 增加 set -x 打印详细日志 ==========
+      # 编译 .NET AOT (使用你的 Docker 脚本)
+      - name: Build AOT for MT7621 (linux-musl-mipsel)
         run: |
+          set -x
           ./build-aot.sh \
             "$(pwd)" \
             HomeNetSentinel.csproj \
             linux-musl-mipsel \
             $HOME/.build/HomeNetSentinel
+        env:
+          # 强制输出详细日志
+          CI: true
 
-      # 2. 下载 MT7621 SDK
-      - name: Download ImmortalWrt MT7621 SDK
+      # 下载 ImmortalWrt SDK
+      - name: Download MT7621 SDK
         run: |
+          set -x
           wget -O sdk.tar.xz "https://downloads.immortalwrt.org/releases/24.10.2/targets/ramips/mt7621/immortalwrt-sdk-24.10.2-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64.tar.xz"
           tar -xf sdk.tar.xz -C $HOME/
-          mv "$HOME/immortalwrt-sdk-24.10.2-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64" "$HOME/immortalwrt-sdk-mt7621"
+          SDK_DIR=$(find $HOME -name "immortalwrt-sdk-*mt7621*" -type d)
+          echo "SDK_DIR=$SDK_DIR" >> $GITHUB_ENV
 
-      # 3. 打包 IPK
-      - name: Build IPK
+      # 打包 IPK
+      - name: Build IPK Package
         run: |
+          set -x
           ./build_ipk.sh \
             --bin "$HOME/.build/HomeNetSentinel/out-musl/HomeNetSentinel" \
             --arch mipsel_24kc \
             --version 1.0.0-0 \
             --output "$HOME/.build/ipk" \
-            --ipkg-build "$HOME/immortalwrt-sdk-mt7621/scripts/ipkg-build"
+            --ipkg-build "${{ env.SDK_DIR }}/scripts/ipkg-build"
 
-      # 4. 上传结果
-      - name: Upload IPK
+      # 上传产物
+      - name: Upload IPK Artifact
         uses: actions/upload-artifact@v4
+        if: success() || failure() # 即使失败也上传（方便排查）
         with:
           name: mt7621-ipk
-          path: $HOME/.build/ipk/*.ipk
+          path: |
+            $HOME/.build/ipk/*.ipk
+            $HOME/.build/HomeNetSentinel/out-musl/ # 顺便上传二进制，确认是否生成
