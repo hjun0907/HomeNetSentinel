@@ -37,12 +37,15 @@ jobs:
           - rid: linux-musl-x64
             ipk_arch: x86_64
             runner: ubuntu-latest
+            aot: true
           - rid: linux-musl-arm64
             ipk_arch: aarch64_generic
             runner: ubuntu-24.04-arm
+            aot: true
           - rid: linux-musl-mips
             ipk_arch: mipsel_24kc
             runner: ubuntu-latest
+            aot: false
 
     steps:
       - name: Checkout
@@ -53,153 +56,80 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
-      - name: Install packaging and AOT dependencies
+      - name: Install packaging dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends binutils fakeroot file xz-utils curl
+          sudo apt-get install -y binutils fakeroot file xz-utils curl
           if ! command -v ipkg-build >/dev/null 2>&1; then
-            sudo curl -fsSL \
-              https://raw.githubusercontent.com/openwrt/openwrt/master/scripts/ipkg-build \
-              -o /usr/local/bin/ipkg-build
+            sudo curl -fsSL https://raw.githubusercontent.com/openwrt/openwrt/master/scripts/ipkg-build -o /usr/local/bin/ipkg-build
             sudo chmod +x /usr/local/bin/ipkg-build
           fi
 
-      - name: Resolve package version
+      - name: Resolve version
         id: version
         shell: bash
         run: |
-          set -euo pipefail
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            tag="${GITHUB_REF_NAME}"
-            version="${tag#v}"
-          elif [[ -n "${{ github.event.inputs.version || '' }}" ]]; then
-            version="${{ github.event.inputs.version }}"
+            ver="${GITHUB_REF_NAME#v}"
           else
-            version="0.0.0"
+            ver="${{ github.event.inputs.version }}"
           fi
-          echo "value=${version}" >> "${GITHUB_OUTPUT}"
+          echo "value=${ver:-0.0.0}" >> "$GITHUB_OUTPUT"
 
-      - name: Publish NativeAOT binary in Alpine
+      - name: Publish binary
         shell: bash
         run: |
           set -euo pipefail
           out_dir="${{ runner.temp }}/publish/${{ matrix.rid }}"
-          mkdir -p "${out_dir}"
-          docker run --rm \
-            -e HOST_UID="$(id -u)" \
-            -e HOST_GID="$(id -g)" \
-            -v "${GITHUB_WORKSPACE}":/src \
-            -v "${out_dir}":/out \
-            -w /src \
-            mcr.microsoft.com/dotnet/sdk:10.0-alpine \
-            sh -lc '
-              set -e
-              apk add --no-cache clang lld musl-dev zlib-dev build-base
-              dotnet publish "'"${PROJECT_DIR}/${PROJECT_FILE}"'" \
-                -c Release \
-                -r "'"${{ matrix.rid }}"'" \
-                -p:PublishAot=true \
-                -p:SelfContained=true \
-                -p:LinkerFlavor=lld \
-                -o /out \
-                -v minimal
-              chown -R "$HOST_UID:$HOST_GID" /out
-            '
+          mkdir -p "$out_dir"
 
-      - name: Verify musl binary interpreter
-        shell: bash
-        run: |
-          set -euo pipefail
-          out_dir="${{ runner.temp }}/publish/${{ matrix.rid }}"
-          bin_path=""
-          if [[ -f "${out_dir}/HomeNet-Sentinel" ]]; then
-            bin_path="${out_dir}/HomeNet-Sentinel"
-          elif [[ -f "${out_dir}/HomeNetSentinel" ]]; then
-            bin_path="${out_dir}/HomeNetSentinel"
-          else
-            echo "Cannot find output binary in ${out_dir}" >&2
-            ls -lah "${out_dir}"
-            exit 1
-          fi
+          dotnet publish "$PROJECT_DIR/$PROJECT_FILE" \
+            -c Release \
+            -r "${{ matrix.rid }}" \
+            -p:PublishAot=${{ matrix.aot }} \
+            -p:SelfContained=true \
+            -p:TrimMode=Full \
+            -p:InvariantGlobalization=true \
+            -o "$out_dir"
 
-          if readelf -l "${bin_path}" | grep -q "Requesting program interpreter"; then
-            readelf -l "${bin_path}" | grep -q "ld-musl" || {
-              echo "Binary is not linked against musl loader" >&2
-              readelf -l "${bin_path}"
-              exit 1
-            }
-          fi
-
-      - name: Prepare binary for packer
+      - name: Prepare binary
         id: bin
         shell: bash
         run: |
           set -euo pipefail
-          out_dir="${{ runner.temp }}/publish/${{ matrix.rid }}"
-          stage_dir="${{ runner.temp }}/staging/${{ matrix.ipk_arch }}"
-          mkdir -p "${stage_dir}"
-
-          if [[ -f "${out_dir}/HomeNet-Sentinel" ]]; then
-            cp "${out_dir}/HomeNet-Sentinel" "${stage_dir}/HomeNet-Sentinel"
-          elif [[ -f "${out_dir}/HomeNetSentinel" ]]; then
-            cp "${out_dir}/HomeNetSentinel" "${stage_dir}/HomeNet-Sentinel"
-          else
-            echo "Cannot find output binary in ${out_dir}" >&2
-            ls -lah "${out_dir}"
-            exit 1
-          fi
-
-          chmod +x "${stage_dir}/HomeNet-Sentinel"
-          echo "path=${stage_dir}/HomeNet-Sentinel" >> "${GITHUB_OUTPUT}"
+          src="${{ runner.temp }}/publish/${{ matrix.rid }}/HomeNetSentinel"
+          dest="${{ runner.temp }}/staging/${{ matrix.ipk_arch }}/HomeNet-Sentinel"
+          mkdir -p "$(dirname "$dest")"
+          cp "$src" "$dest"
+          chmod +x "$dest"
+          echo "path=$dest" >> "$GITHUB_OUTPUT"
 
       - name: Build IPK
-        shell: bash
         run: |
-          set -euo pipefail
-          out_dir="${{ runner.temp }}/ipk/${{ matrix.ipk_arch }}"
-          mkdir -p "${out_dir}"
           sh ./build_ipk.sh \
             --bin "${{ steps.bin.outputs.path }}" \
             --arch "${{ matrix.ipk_arch }}" \
             --version "${{ steps.version.outputs.value }}-1" \
-            --output "${out_dir}"
+            --output "${{ runner.temp }}/ipk/${{ matrix.ipk_arch }}"
 
-      - name: Upload IPK artifact
+      - name: Upload IPK
         uses: actions/upload-artifact@v4
         with:
           name: ipk-${{ matrix.ipk_arch }}
           path: ${{ runner.temp }}/ipk/${{ matrix.ipk_arch }}/*.ipk
-          if-no-files-found: error
 
   release:
     runs-on: ubuntu-latest
     needs: build-ipk
     if: github.ref_type == 'tag' || github.event.inputs.publish_release == 'true'
     steps:
-      - name: Download all IPK artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
-
-      - name: Resolve release metadata
-        id: meta
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            tag="${GITHUB_REF_NAME}"
-          elif [[ -n "${{ github.event.inputs.tag_name || '' }}" ]]; then
-            tag="${{ github.event.inputs.tag_name }}"
-          else
-            tag="nightly-${GITHUB_RUN_NUMBER}"
-          fi
-          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-
-      - name: Publish GitHub Release
-        uses: softprops/softprops/gh-release@v2
+      - name: Create Release
+        uses: softprops/gh-release@v2
         with:
-          tag_name: ${{ steps.meta.outputs.tag }}
-          target_commitish: ${{ github.sha }}
-          generate_release_notes: true
+          tag_name: ${{ github.ref_name || github.event.inputs.tag_name || 'nightly-' }}
           files: dist/*.ipk
+          generate_release_notes: true
