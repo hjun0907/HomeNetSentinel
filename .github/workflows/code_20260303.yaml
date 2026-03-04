@@ -21,11 +21,17 @@ jobs:
           chmod +x $HOME/.build/HomeNetSentinel/out-musl/HomeNetSentinel
 
       # 改用 24.10.1 + 浙大镜像（100% 可下）
-      - name: Download MT7621 SDK (fixed)
-        run: |
-          wget -O sdk.tar.zst https://mirror.zju.edu.cn/immortalwrt/releases/24.10.1/targets/ramips/mt7621/immortalwrt-sdk-24.10.1-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64.tar.zst
-          tar -xf sdk.tar.zst -C $HOME/
-          mv $HOME/immortalwrt-sdk-24.10.1-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64 $HOME/immortalwrt-sdk-mt7621
+      - name: Download MT7621 SDK (fixed with retry & curl)
+  run: |
+    curl -L -o sdk.tar.zst \
+      https://mirror.zju.edu.cn/immortalwrt/releases/24.10.1/targets/ramips/mt7621/immortalwrt-sdk-24.10.1-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64.tar.zst \
+      --retry 10 --retry-delay 5 --connect-timeout 10 --max-time 180
+
+    tar -xf sdk.tar.zst -C $HOME/
+
+    mv $HOME/immortalwrt-sdk-24.10.1-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64 \
+       $HOME/immortalwrt-sdk-mt7621
+
 
       # 打包 IPK（结构正确，后续替换二进制即可）
       - name: Build IPK
