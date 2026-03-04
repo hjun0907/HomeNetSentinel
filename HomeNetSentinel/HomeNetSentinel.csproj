@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -8,11 +8,18 @@
     <PublishAot>true</PublishAot>
     <InvariantGlobalization>true</InvariantGlobalization>
     <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
+
+    <!-- 👇 MIPS 必须加的配置 -->
+    <LinkerFlavor>lld</LinkerFlavor>
+    <EventSourceSupport>false</EventSourceSupport>
+    <StripSymbols>true</StripSymbols>
+    <TrimMode>Full</TrimMode>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.VisualStudio.Azure.Containers.Tools.Targets" Version="1.23.0" />
+    <PackageReference Include="Microsoft.VisualStudio.Azure.Containers.Tools.Tools.Targets" Version="1.23.0" />
     <PackageReference Include="MQTTnet" Version="5.1.0.1559" />
   </ItemGroup>
 
 </Project>
+
