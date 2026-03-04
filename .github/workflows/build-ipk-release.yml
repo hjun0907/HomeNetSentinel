@@ -40,6 +40,9 @@ jobs:
           - rid: linux-musl-arm64
             ipk_arch: aarch64_generic
             runner: ubuntu-24.04-arm
+          - rid: linux-musl-mips
+            ipk_arch: mipsel_24kc
+            runner: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -194,7 +197,7 @@ jobs:
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/softprops/gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           target_commitish: ${{ github.sha }}
