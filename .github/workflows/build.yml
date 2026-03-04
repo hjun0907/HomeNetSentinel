@@ -31,7 +31,6 @@ jobs:
           mv $HOME/immortalwrt-sdk-24.10.1-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64 \
              $HOME/immortalwrt-sdk-mt7621
 
-
       - name: Build IPK
         run: |
           ./build_ipk.sh \
