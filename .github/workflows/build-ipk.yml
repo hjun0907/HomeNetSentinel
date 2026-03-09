@@ -28,21 +28,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: {go-version: "1.23"}
+        with:
+          go-version: "1.23"
 
-      - name: Install tools
+      - name: Install build tools (修复 ipkg-build 下载)
         run: |
-          sudo apt update
+          sudo apt update -y
           sudo apt install -y binutils fakeroot file xz-utils curl
-          sudo curl -fsSL `https://raw.githubusercontent.com/openwrt/openwrt/master/scripts/ipkg-build`  -o /usr/local/bin/ipkg-build
+          # 关键修复：完整、正确的 curl 命令（一行写完）
+          sudo curl -fsSL https://raw.githubusercontent.com/openwrt/openwrt/master/scripts/ipkg-build -o /usr/local/bin/ipkg-build
           sudo chmod +x /usr/local/bin/ipkg-build
 
-      - name: Build Go binary
+      - name: Build Go binary (全平台)
         run: |
-          ${{ matrix.env }} go build -o HomeNet-Sentinel .
+          ${{ matrix.env }} go build -ldflags="-s -w" -o HomeNet-Sentinel .
           chmod +x HomeNet-Sentinel
+          # 验证二进制架构（可选，便于排查）
+          file HomeNet-Sentinel
 
-      - name: Build IPK
+      - name: Build IPK package
         run: |
           mkdir -p ipk
           sh ./build_ipk.sh --bin ./HomeNet-Sentinel --arch ${{ matrix.ipk }} --output ipk
@@ -51,15 +55,19 @@ jobs:
         with:
           name: ipk-${{ matrix.ipk }}
           path: ipk/*.ipk
+          if-no-files-found: error
 
   release:
     runs-on: ubuntu-latest
     needs: build
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/download-artifact@v4
-        with: {path: dist, merge-multiple: true}
+        with:
+          path: dist
+          merge-multiple: true
       - uses: softprops/gh-release@v2
         with:
-          tag_name: ${{ github.ref_name || 'nightly' }}
+          tag_name: ${{ github.ref_name || 'nightly-' }}
           files: dist/*.ipk
           generate_release_notes: true
