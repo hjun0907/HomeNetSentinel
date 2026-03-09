@@ -52,7 +52,6 @@ jobs:
       - name: Build IPK package
         run: |
           mkdir -p ipk
-          # 关键：转为绝对路径，避免 ipkg-build 路径错误
           OUT_DIR="$(cd ipk && pwd)"
           sh ./build_ipk.sh --bin ./HomeNet-Sentinel --arch ${{ matrix.ipk }} --output "$OUT_DIR"
 
@@ -71,7 +70,8 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - uses: softprops/gh-release@v2
+      # 核心修复：正确的 gh-release Action 地址
+      - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name || 'nightly-' }}
           files: dist/*.ipk
