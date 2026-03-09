@@ -1,6 +1,0 @@
-github.com/eclipse/paho.mqtt.golang v1.5.0 h1:O5cEAwQ5Au+wxnwxq6b+H8CwX+Gq+mq6kIMUcU1050c=
-github.com/eclipse/paho.mqtt.golang v1.5.0/go.mod h1:eTzp8PC+58mHk8OQHh0uQoRQ4vqQlT8G0lS8g00h000=
-github.com/golang/protobuf v1.5.4 h1:R0r8UyN/4k8VQ9k+lJ55oD8UKk/pcC1FkCk7D1U97wI=
-github.com/golang/protobuf v1.5.4/go.mod h1:j6dHD6sCY8g/nkQaS0d1Q8A0x9l56X6b76Fz5FbLd0w=
-github.com/google/uuid v1.6.0 h1:NIvkzVD5l1cU7EZvtF+Xq2k98gQ1rYz9DpJQnNmq8dQ=
-github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
