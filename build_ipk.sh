@@ -13,12 +13,13 @@ FILES_DIR="$PKG_SRC_DIR/files"
 PREBUILT_BIN="$PKG_SRC_DIR/prebuilt/HomeNet-Sentinel"
 IPKG_BUILD_BIN="ipkg-build"
 
+# 修复：默认输出目录改为当前目录的 ipk 文件夹（和 Action 对齐）
 BUILD_ROOT="$ROOT_DIR/.ipkbuild"
 PKG_DIR="$BUILD_ROOT/${PKG_NAME}"
 CONTROL_DIR="$PKG_DIR/CONTROL"
-OUT_DIR="$ROOT_DIR/bin-ipk"
+OUT_DIR="$ROOT_DIR/ipk"  # 关键：默认和 Action 传入的路径一致
 
-# 修复：用 sh 兼容的参数解析（替换 [[ ]] 为 [ ]）
+# 用 sh 兼容的参数解析
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --ipkg-build)
@@ -32,7 +33,8 @@ while [ "$#" -gt 0 ]; do
       ;;
     --output|-o)
       if [ "$#" -ge 2 ]; then
-        OUT_DIR="$2"
+        # 修复：将传入的路径转为绝对路径
+        OUT_DIR="$(cd "$2" && pwd)"
         shift 2
       else
         echo "ERROR: --output requires a directory argument" >&2
@@ -91,7 +93,7 @@ EOF
   esac
 done
 
-# 修复：用 sh 兼容的判断
+# 验证 ipkg-build
 if [ "$IPKG_BUILD_BIN" = "ipkg-build" ]; then
   if ! command -v ipkg-build >/dev/null 2>&1; then
     echo "ERROR: ipkg-build not found in PATH" >&2
@@ -104,29 +106,36 @@ else
   fi
 fi
 
+# 验证二进制文件
 if [ ! -f "$PREBUILT_BIN" ]; then
   echo "ERROR: Missing binary: $PREBUILT_BIN" >&2
-  echo "Place your OpenWrt-compatible HomeNet-Sentinel binary there first." >&2
+  ls -lah "$(dirname "$PREBUILT_BIN")" || true
   exit 1
 fi
 
+# 清理旧构建目录
 rm -rf "$PKG_DIR"
+# 确保输出目录存在（关键修复）
 mkdir -p "$CONTROL_DIR" "$OUT_DIR"
 
-# Copy package files layout
-cp -a "$FILES_DIR/." "$PKG_DIR/"
+# 复制 LuCI 文件
+if [ -d "$FILES_DIR" ]; then
+  cp -a "$FILES_DIR/." "$PKG_DIR/"
+else
+  echo "WARNING: No files directory found at $FILES_DIR" >&2
+fi
 
-# Install binary
+# 安装二进制文件
 mkdir -p "$PKG_DIR/usr/bin"
 cp "$PREBUILT_BIN" "$PKG_DIR/usr/bin/HomeNet-Sentinel"
 chmod 0755 "$PKG_DIR/usr/bin/HomeNet-Sentinel"
 
-# Ensure init script executable
+# 确保 init 脚本可执行
 if [ -f "$PKG_DIR/etc/init.d/homenet-sentinel" ]; then
   chmod 0755 "$PKG_DIR/etc/init.d/homenet-sentinel"
 fi
 
-# CONTROL metadata
+# 生成 CONTROL 文件
 cat > "$CONTROL_DIR/control" <<EOF
 Package: $PKG_NAME
 Version: $PKG_FULL_VERSION
@@ -138,12 +147,14 @@ Depends: libc, libpthread, luci-base
 Description: HomeNet Sentinel service with LuCI UI for MQTT presence and WAN telemetry.
 EOF
 
+# 生成 postinst
 cat > "$CONTROL_DIR/postinst" <<'EOF'
 #!/bin/sh
 exit 0
 EOF
 chmod 0755 "$CONTROL_DIR/postinst"
 
+# 生成 prerm
 cat > "$CONTROL_DIR/prerm" <<'EOF'
 #!/bin/sh
 if [ -x /etc/init.d/homenet-sentinel ]; then
@@ -154,13 +165,15 @@ exit 0
 EOF
 chmod 0755 "$CONTROL_DIR/prerm"
 
+# 生成 conffiles（如果存在）
 if [ -f "$PKG_DIR/etc/config/homenet-sentinel" ]; then
   cat > "$CONTROL_DIR/conffiles" <<'EOF'
 /etc/config/homenet-sentinel
 EOF
 fi
 
-echo "Building IPK..."
+# 构建 IPK（关键：确保 OUT_DIR 是绝对路径）
+echo "Building IPK to $OUT_DIR..."
 if [ "$IPKG_BUILD_BIN" = "ipkg-build" ]; then
   ipkg-build "$PKG_DIR" "$OUT_DIR"
 elif [ -x "$IPKG_BUILD_BIN" ]; then
@@ -171,4 +184,4 @@ fi
 
 echo
 echo "Done. Output:"
-ls -lh "$OUT_DIR"/*.ipk
+ls -lh "$OUT_DIR"/*.ipk || true
