@@ -31,19 +31,24 @@ jobs:
         with:
           go-version: "1.23"
 
-      - name: Install build tools (修复 ipkg-build 下载)
+      - name: Install build tools
         run: |
           sudo apt update -y
           sudo apt install -y binutils fakeroot file xz-utils curl
-          # 关键修复：完整、正确的 curl 命令（一行写完）
           sudo curl -fsSL https://raw.githubusercontent.com/openwrt/openwrt/master/scripts/ipkg-build -o /usr/local/bin/ipkg-build
           sudo chmod +x /usr/local/bin/ipkg-build
+
+      # 核心修复：先补全依赖，生成正确的 go.sum
+      - name: Fix Go module dependencies
+        run: |
+          go mod tidy  # 补全依赖并生成 go.sum
+          go mod verify  # 验证依赖完整性
 
       - name: Build Go binary (全平台)
         run: |
           ${{ matrix.env }} go build -ldflags="-s -w" -o HomeNet-Sentinel .
           chmod +x HomeNet-Sentinel
-          # 验证二进制架构（可选，便于排查）
+          # 验证二进制架构
           file HomeNet-Sentinel
 
       - name: Build IPK package
