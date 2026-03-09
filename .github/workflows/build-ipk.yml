@@ -1,0 +1,65 @@
+name: Build and Release IPK
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - go: amd64
+            ipk: x86_64
+            env: CGO_ENABLED=0 GOOS=linux GOARCH=amd64
+          - go: arm64
+            ipk: aarch64_generic
+            env: CGO_ENABLED=0 GOOS=linux GOARCH=arm64
+          - go: mipsle
+            ipk: mipsel_24kc
+            env: CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: "1.23"}
+
+      - name: Install tools
+        run: |
+          sudo apt update
+          sudo apt install -y binutils fakeroot file xz-utils curl
+          sudo curl -fsSL `https://raw.githubusercontent.com/openwrt/openwrt/master/scripts/ipkg-build`  -o /usr/local/bin/ipkg-build
+          sudo chmod +x /usr/local/bin/ipkg-build
+
+      - name: Build Go binary
+        run: |
+          ${{ matrix.env }} go build -o HomeNet-Sentinel .
+          chmod +x HomeNet-Sentinel
+
+      - name: Build IPK
+        run: |
+          mkdir -p ipk
+          sh ./build_ipk.sh --bin ./HomeNet-Sentinel --arch ${{ matrix.ipk }} --output ipk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ipk-${{ matrix.ipk }}
+          path: ipk/*.ipk
+
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {path: dist, merge-multiple: true}
+      - uses: softprops/gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name || 'nightly' }}
+          files: dist/*.ipk
+          generate_release_notes: true
