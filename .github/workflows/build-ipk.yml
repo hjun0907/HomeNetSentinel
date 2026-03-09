@@ -38,23 +38,23 @@ jobs:
           sudo curl -fsSL https://raw.githubusercontent.com/openwrt/openwrt/master/scripts/ipkg-build -o /usr/local/bin/ipkg-build
           sudo chmod +x /usr/local/bin/ipkg-build
 
-      # 核心修复：先补全依赖，生成正确的 go.sum
       - name: Fix Go module dependencies
         run: |
-          go mod tidy  # 补全依赖并生成 go.sum
-          go mod verify  # 验证依赖完整性
+          go mod tidy
+          go mod verify
 
       - name: Build Go binary (全平台)
         run: |
           ${{ matrix.env }} go build -ldflags="-s -w" -o HomeNet-Sentinel .
           chmod +x HomeNet-Sentinel
-          # 验证二进制架构
           file HomeNet-Sentinel
 
       - name: Build IPK package
         run: |
           mkdir -p ipk
-          sh ./build_ipk.sh --bin ./HomeNet-Sentinel --arch ${{ matrix.ipk }} --output ipk
+          # 关键：转为绝对路径，避免 ipkg-build 路径错误
+          OUT_DIR="$(cd ipk && pwd)"
+          sh ./build_ipk.sh --bin ./HomeNet-Sentinel --arch ${{ matrix.ipk }} --output "$OUT_DIR"
 
       - uses: actions/upload-artifact@v4
         with:
