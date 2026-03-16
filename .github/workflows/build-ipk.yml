@@ -21,9 +21,20 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取所有标签和历史
+
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
+
+      - name: Get version
+        id: get_version
+        run: |
+          # 从 git tag 获取版本
+          VERSION=$(git describe --tags --always --dirty)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
 
       - name: Install build tools
         run: |
@@ -37,9 +48,9 @@ jobs:
           go mod tidy
           go mod verify
 
-      - name: Build Go binary (全平台)
+      - name: Build Go binary
         run: |
-          ${{ matrix.env }} go build -ldflags="-s -w" -o HomeNet-Sentinel .
+          ${{ matrix.env }} go build -ldflags="-s -w -X main.Version=${{ steps.get_version.outputs.version }}" -o HomeNet-Sentinel .
           chmod +x HomeNet-Sentinel
           file HomeNet-Sentinel
 
@@ -47,26 +58,11 @@ jobs:
         run: |
           mkdir -p ipk
           OUT_DIR="$(cd ipk && pwd)"
-          sh ./build_ipk.sh --bin ./HomeNet-Sentinel --arch ${{ matrix.ipk }} --output "$OUT_DIR"
+          # 传递版本号给构建脚本
+          VERSION="${{ steps.get_version.outputs.version }}" sh ./build_ipk.sh --bin ./HomeNet-Sentinel --arch ${{ matrix.ipk }} --output "$OUT_DIR"
 
       - uses: actions/upload-artifact@v4
         with:
           name: ipk-${{ matrix.ipk }}
           path: ipk/*.ipk
           if-no-files-found: error
-
-  release:
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-      # 核心修复：正确的 gh-release Action 地址
-      - uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name || 'nightly-' }}
-          files: dist/*.ipk
-          generate_release_notes: true
