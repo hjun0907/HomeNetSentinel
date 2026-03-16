@@ -15,12 +15,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - go: amd64
-            ipk: x86_64
-            env: CGO_ENABLED=0 GOOS=linux GOARCH=amd64
-          - go: arm64
-            ipk: aarch64_generic
-            env: CGO_ENABLED=0 GOOS=linux GOARCH=arm64
           - go: mipsle
             ipk: mipsel_24kc
             env: CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat
