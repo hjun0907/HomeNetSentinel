@@ -2,44 +2,43 @@ name: Build and Release IPK
 
 on:
   push:
-    tags: ["v*"]
-  workflow_dispatch:
+    tags: ["v*"]  # 推送 v1.0.0, v2.1.3 等标签时触发
+  workflow_dispatch:  # 允许手动触发
 
 permissions:
-  contents: write
+  contents: write  # 需要写入权限来创建 Release
 
 jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
+      fail-fast: false  # 一个架构失败不影响其他架构
       matrix:
         include:
           - go: mipsle
             ipk: mipsel_24kc
             env: CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat
+          # 可以在这里添加更多架构
+          # - go: arm
+          #   ipk: arm_cortex-a9
+          #   env: CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7
 
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # 获取所有标签和历史
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
           go-version: "1.23"
-
-      - name: Get version
-        id: get_version
-        run: |
-          # 从 git tag 获取版本
-          VERSION=$(git describe --tags --always --dirty)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Version: $VERSION"
+          check-latest: true
+          cache: true  # 启用 Go 模块缓存
 
       - name: Install build tools
         run: |
           sudo apt update -y
           sudo apt install -y binutils fakeroot file xz-utils curl
+          # 下载 OpenWRT 的 ipkg-build 脚本
           sudo curl -fsSL https://raw.githubusercontent.com/openwrt/openwrt/master/scripts/ipkg-build -o /usr/local/bin/ipkg-build
           sudo chmod +x /usr/local/bin/ipkg-build
 
@@ -47,22 +46,58 @@ jobs:
         run: |
           go mod tidy
           go mod verify
+          go mod download  # 预下载依赖
 
       - name: Build Go binary
         run: |
-          ${{ matrix.env }} go build -ldflags="-s -w -X main.Version=${{ steps.get_version.outputs.version }}" -o HomeNet-Sentinel .
+          ${{ matrix.env }} go build -ldflags="-s -w -X main.Version=${{ github.ref_name }}" -o HomeNet-Sentinel .
           chmod +x HomeNet-Sentinel
-          file HomeNet-Sentinel
+          file HomeNet-Sentinel  # 显示二进制文件信息（用于调试）
 
       - name: Build IPK package
         run: |
           mkdir -p ipk
           OUT_DIR="$(cd ipk && pwd)"
-          # 传递版本号给构建脚本
-          VERSION="${{ steps.get_version.outputs.version }}" sh ./build_ipk.sh --bin ./HomeNet-Sentinel --arch ${{ matrix.ipk }} --output "$OUT_DIR"
+          # 确保 build_ipk.sh 脚本存在
+          if [ ! -f "./build_ipk.sh" ]; then
+            echo "Error: build_ipk.sh not found!"
+            exit 1
+          fi
+          sh ./build_ipk.sh --bin ./HomeNet-Sentinel --arch ${{ matrix.ipk }} --output "$OUT_DIR"
 
-      - uses: actions/upload-artifact@v4
+      - name: List built packages
+        run: ls -la ipk/
+
+      - name: Upload IPK artifact
+        uses: actions/upload-artifact@v4
         with:
           name: ipk-${{ matrix.ipk }}
           path: ipk/*.ipk
           if-no-files-found: error
+          retention-days: 7  # 保留7天
+
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true  # 将所有 artifact 合并到同一目录
+
+      - name: List downloaded files
+        run: ls -la dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          files: dist/*.ipk
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
