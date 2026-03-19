@@ -63,7 +63,10 @@ jobs:
             echo "Error: build_ipk.sh not found!"
             exit 1
           fi
-          sh ./build_ipk.sh --bin ./HomeNet-Sentinel --arch ${{ matrix.ipk }} --output "$OUT_DIR"
+          # 从标签提取版本号 (去掉 v 前缀)
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          sh ./build_ipk.sh --bin ./HomeNet-Sentinel --arch ${{ matrix.ipk }} --version "${VERSION}-1" --output "$OUT_DIR"
 
       - name: List built packages
         run: ls -la ipk/

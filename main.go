@@ -18,7 +18,7 @@ func main() {
 	fmt.Println("🚀 HomeNetSentinel 启动成功")
 	cfg := config.Load()
 
-	client, err := mqtt.NewClient(cfg.MQTTBroker, cfg.MQTTClientID)
+	client, err := mqtt.NewClient(cfg.MQTTBroker, cfg.MQTTClientID, cfg.Username, cfg.Password)
 	if err != nil {
 		fmt.Println("❌ MQTT 连接失败:", err)
 		return

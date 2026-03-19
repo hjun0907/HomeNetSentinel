@@ -7,13 +7,21 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
-func NewClient(broker, clientID string) (mqtt.Client, error) {
+func NewClient(broker, clientID, username, password string) (mqtt.Client, error) {
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(broker)
 	opts.SetClientID(clientID)
 	opts.SetCleanSession(true)
 	opts.SetAutoReconnect(true)
 	opts.SetConnectTimeout(10 * time.Second)
+
+	// 添加认证信息
+	if username != "" {
+		opts.SetUsername(username)
+		if password != "" {
+			opts.SetPassword(password)
+		}
+	}
 
 	client := mqtt.NewClient(opts)
 	if token := client.Connect(); token.Wait() && token.Error() != nil {
