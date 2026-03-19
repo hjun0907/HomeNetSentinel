@@ -66,6 +66,7 @@ jobs:
           # 从标签提取版本号 (去掉 v 前缀)
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
+          echo "Building version: ${VERSION}-1"
           sh ./build_ipk.sh --bin ./HomeNet-Sentinel --arch ${{ matrix.ipk }} --version "${VERSION}-1" --output "$OUT_DIR"
 
       - name: List built packages

@@ -136,6 +136,7 @@ if [ -f "$PKG_DIR/etc/init.d/homenet-sentinel" ]; then
 fi
 
 # 生成 CONTROL 文件
+echo "Using version: $PKG_FULL_VERSION"
 cat > "$CONTROL_DIR/control" <<EOF
 Package: $PKG_NAME
 Version: $PKG_FULL_VERSION
