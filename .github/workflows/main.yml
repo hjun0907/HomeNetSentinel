@@ -152,21 +152,40 @@ jobs:
           docker pull ghcr.io/openwrt/sdk:${{ matrix.sdk_arch }}
           
           echo "=== Building APK package ==="
+          # 注意：使用 --user root 修复权限问题
+          # SDK 的工作目录是 /builder，需要在那里创建 feeds.conf 并运行构建
           docker run --rm \
+            --user root \
             -v $PWD:/workspace \
-            -w /workspace \
             ghcr.io/openwrt/sdk:${{ matrix.sdk_arch }} \
             sh -c '
               set -e
               echo "=== SDK Info ==="
               cat /etc/openwrt_release 2>/dev/null || true
               
+              echo "=== SDK Build Directory ==="
+              pwd
+              ls -la
+              
+              # 切换到 SDK 构建目录（通常是 /builder 或 /workspace）
+              # OpenWrt SDK 会在容器初始化时创建 /builder 目录
+              BUILD_DIR="/builder"
+              if [ ! -d "$BUILD_DIR" ]; then
+                BUILD_DIR="/workspace"
+              fi
+              echo "Using build directory: $BUILD_DIR"
+              cd "$BUILD_DIR"
+              
               echo "=== Setting up feeds ==="
-              # 创建 feeds.conf，将本地包目录链接进去
+              # 在 SDK 构建目录创建 feeds.conf，指向挂载的包目录
               echo "src-link homenet /workspace/package/luci-app-homenet-sentinel" > feeds.conf
+              cat feeds.conf
               
               # 更新和安装 feed
+              echo "=== Updating feeds ==="
               ./scripts/feeds update -a 2>&1 || true
+              
+              echo "=== Installing feeds ==="
               ./scripts/feeds install -a 2>&1 || true
               
               echo "=== Building package ==="
