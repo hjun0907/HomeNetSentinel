@@ -49,6 +49,9 @@ define Package/luci-app-homenet-sentinel/install
 
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/model/cbi
 	$(INSTALL_DATA) ./files/usr/lib/lua/luci/model/cbi/homenet_sentinel.lua $(1)/usr/lib/lua/luci/model/cbi/homenet_sentinel.lua
+
+	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/view/homenet_sentinel
+	$(INSTALL_DATA) ./files/usr/lib/lua/luci/view/homenet_sentinel/status.htm $(1)/usr/lib/lua/luci/view/homenet_sentinel/status.htm
 endef
 
 define Package/luci-app-homenet-sentinel/postinst
