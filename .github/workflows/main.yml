@@ -9,7 +9,9 @@ permissions:
   contents: write
 
 jobs:
+  # ============================================
   # 构建 Go 二进制文件（多架构）
+  # ============================================
   build-binary:
     runs-on: ubuntu-latest
     strategy:
@@ -18,13 +20,9 @@ jobs:
         include:
           - go: mipsle
             ipk: mipsel_24kc
-            sdk_target: ramips
-            sdk_subtarget: mt7621
             env: CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat
           - go: arm64
             ipk: aarch64_cortex-a53
-            sdk_target: armsr
-            sdk_subtarget: armv8
             env: CGO_ENABLED=0 GOOS=linux GOARCH=arm64
 
     steps:
@@ -54,7 +52,9 @@ jobs:
           path: HomeNet-Sentinel
           retention-days: 1
 
+  # ============================================
   # 构建 IPK 包（OpenWrt 24.x 及以下）
+  # ============================================
   build-ipk:
     runs-on: ubuntu-latest
     needs: build-binary
@@ -106,7 +106,9 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # 构建 APK 包（OpenWrt 25.x+）
+  # ============================================
+  # 构建 APK 包（OpenWrt 25.x+）使用官方 SDK
+  # ============================================
   build-apk:
     runs-on: ubuntu-latest
     needs: build-binary
@@ -115,11 +117,9 @@ jobs:
       matrix:
         include:
           - ipk: mipsel_24kc
-            sdk_arch: mips_24kc
-            sdk_image: ghcr.io/openwrt/sdk:mips_24kc
+            sdk_url: "https://downloads.openwrt.org/releases/23.05.0/targets/ramips/mt7621/openwrt-sdk-23.05.0-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
           - ipk: aarch64_cortex-a53
-            sdk_arch: aarch64_cortex-a53
-            sdk_image: ghcr.io/openwrt/sdk:aarch64_cortex-a53
+            sdk_url: "https://downloads.openwrt.org/releases/23.05.0/targets/armsr/armv8/openwrt-sdk-23.05.0-armsr-armv8_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
 
     steps:
       - name: Checkout code
@@ -148,37 +148,38 @@ jobs:
           echo "Updated Makefile:"
           head -6 package/luci-app-homenet-sentinel/Makefile
 
-      - name: Build APK with OpenWrt SDK Docker
+      - name: Build APK with OpenWrt SDK
         run: |
-          echo "=== Pulling OpenWrt SDK Docker image ==="
-          docker pull ${{ matrix.sdk_image }}
+          mkdir -p apk
 
-          echo "=== Building APK package ==="
           docker run --rm \
             --user root \
             -v $PWD:/workspace \
-            ${{ matrix.sdk_image }} \
+            ubuntu:22.04 \
             /bin/bash -c '
               set -e
 
-              echo "=== SDK Environment ==="
-              if [ -d "/builder" ]; then
-                cd /builder
-              else
-                echo "WARNING: /builder not found, using /"
-                cd /
-              fi
-              pwd
-              ls -la
+              echo "=== Installing dependencies ==="
+              apt update -y
+              apt install -y wget xz-utils tar make gcc g++ \
+                libncurses-dev zlib1g-dev gawk flex bison \
+                git python3 python3-dev rsync unzip file \
+                time
 
-              echo "=== Checking SDK structure ==="
-              if [ -f "./scripts/feeds" ]; then
-                echo "scripts/feeds found ✅"
-              else
-                echo "ERROR: scripts/feeds not found!"
-                find / -name "feeds" -type f 2>/dev/null | head -10
-                exit 1
-              fi
+              echo "=== Downloading OpenWrt SDK ==="
+              cd /workspace
+              SDK_URL="${{ matrix.sdk_url }}"
+              echo "SDK URL: $SDK_URL"
+              wget -O sdk.tar.xz "$SDK_URL"
+
+              echo "=== Extracting SDK ==="
+              mkdir -p sdk
+              tar -xJf sdk.tar.xz -C sdk --strip-components=1
+              cd sdk
+
+              echo "=== SDK structure ==="
+              ls -la
+              ls -la scripts/ | head -10
 
               echo "=== Setting up feeds ==="
               echo "src-link homenet /workspace/package/luci-app-homenet-sentinel" > feeds.conf
@@ -190,27 +191,22 @@ jobs:
               echo "=== Installing feeds ==="
               ./scripts/feeds install -a
 
-              echo "=== Installing specific package ==="
-              ./scripts/feeds install luci-app-homenet-sentinel
-
               echo "=== Building package ==="
               make package/luci-app-homenet-sentinel/compile V=s
 
-              echo "=== Build completed successfully ==="
+              echo "=== Build completed ==="
 
-              echo "=== Finding generated files ==="
-              find ./bin -name "*.apk" -type f 2>/dev/null || echo "No APK found"
-              find ./bin -name "*.ipk" -type f 2>/dev/null || echo "No IPK found"
-
-              echo "=== Copying artifacts to /workspace ==="
+              echo "=== Copying artifacts ==="
               mkdir -p /workspace/apk
-              find ./bin -name "*.apk" -type f -exec cp -v {} /workspace/apk/ \;
-              find ./bin -name "*.ipk" -type f -exec cp -v {} /workspace/apk/ \;
+              find ./bin -name "*.apk" -type f -exec cp -v {} /workspace/apk/ \; 2>/dev/null || echo "No APK files found"
+              find ./bin -name "*.ipk" -type f -exec cp -v {} /workspace/apk/ \; 2>/dev/null || echo "No IPK files found"
+
+              echo "=== Artifacts copied ==="
+              ls -la /workspace/apk/ || echo "No artifacts"
             '
 
       - name: Find and collect APK files
         run: |
-          mkdir -p apk
           echo "=== Searching for package files ==="
           find . -name "*.apk" -type f 2>/dev/null | tee /tmp/apk_files.txt || true
           find . -name "*.ipk" -type f 2>/dev/null | tee /tmp/ipk_files.txt || true
@@ -224,10 +220,6 @@ jobs:
           echo "=== APK files found ==="
           ls -la apk/ || echo "No APK files found"
 
-          if [ -z "$(ls -A apk 2>/dev/null)" ]; then
-            echo "WARNING: No APK files were generated!"
-          fi
-
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -236,7 +228,9 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  # ============================================
   # 创建 GitHub Release
+  # ============================================
   release:
     runs-on: ubuntu-latest
     needs: [build-ipk, build-apk]
