@@ -131,10 +131,11 @@ jobs:
           name: binary-${{ matrix.ipk }}
           path: package/luci-app-homenet-sentinel/prebuilt/
 
-      - name: Set binary permissions
+      - name: Check binary exists
         run: |
-          chmod +x package/luci-app-homenet-sentinel/prebuilt/HomeNet-Sentinel
-          file package/luci-app-homenet-sentinel/prebuilt/HomeNet-Sentinel
+          echo "=== Checking binary ==="
+          ls -la package/luci-app-homenet-sentinel/prebuilt/
+          file package/luci-app-homenet-sentinel/prebuilt/HomeNet-Sentinel || echo "Binary not found!"
 
       - name: Update Makefile version
         run: |
@@ -146,7 +147,7 @@ jobs:
           sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=$PKG_VERSION/" package/luci-app-homenet-sentinel/Makefile
           sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=$PKG_RELEASE/" package/luci-app-homenet-sentinel/Makefile
           echo "Updated Makefile:"
-          head -6 package/luci-app-homenet-sentinel/Makefile
+          head -8 package/luci-app-homenet-sentinel/Makefile
 
       - name: Build APK with OpenWrt SDK
         run: |
@@ -159,12 +160,32 @@ jobs:
             /bin/bash -c '
               set -e
 
-              echo "=== Installing dependencies ==="
+              echo "=== Installing all dependencies ==="
               apt update -y
-              apt install -y wget xz-utils tar make gcc g++ \
+              apt install -y \
+                wget xz-utils tar make gcc g++ \
                 libncurses-dev zlib1g-dev gawk flex bison \
                 git python3 python3-dev rsync unzip file \
-                time
+                time \
+                bzip2 \
+                build-essential \
+                libssl-dev \
+                gettext \
+                xsltproc \
+                docbook-xsl \
+                patch \
+                perl \
+                findutils \
+                diffutils \
+                cpio \
+                bc \
+                cpp \
+                binutils \
+                libelf-dev \
+                libtool \
+                automake \
+                autoconf \
+                pkg-config
 
               echo "=== Downloading OpenWrt SDK ==="
               cd /workspace
@@ -181,6 +202,10 @@ jobs:
               ls -la
               ls -la scripts/ | head -10
 
+              echo "=== Checking our package ==="
+              ls -la /workspace/package/luci-app-homenet-sentinel/
+              ls -la /workspace/package/luci-app-homenet-sentinel/prebuilt/
+
               echo "=== Setting up feeds ==="
               echo "src-link homenet /workspace/package/luci-app-homenet-sentinel" > feeds.conf
               cat feeds.conf
@@ -191,8 +216,21 @@ jobs:
               echo "=== Installing feeds ==="
               ./scripts/feeds install -a
 
-              echo "=== Building package ==="
-              make package/luci-app-homenet-sentinel/compile V=s
+              echo "=== Installing specific package ==="
+              ./scripts/feeds install luci-app-homenet-sentinel
+
+              echo "=== Listing installed feeds ==="
+              ./scripts/feeds list | grep homenet || echo "Package not found in feeds!"
+
+              echo "=== Building package with verbose logs ==="
+              make package/luci-app-homenet-sentinel/compile V=s 2>&1 | tee build.log || {
+                echo "=== Build failed ==="
+                echo "=== Last 200 lines of build.log ==="
+                tail -200 build.log
+                echo "=== Checking Makefile syntax ==="
+                make -n package/luci-app-homenet-sentinel/compile 2>&1 || echo "Makefile check failed"
+                exit 1
+              }
 
               echo "=== Build completed ==="
 
@@ -211,6 +249,7 @@ jobs:
           find . -name "*.apk" -type f 2>/dev/null | tee /tmp/apk_files.txt || true
           find . -name "*.ipk" -type f 2>/dev/null | tee /tmp/ipk_files.txt || true
 
+          mkdir -p apk
           while IFS= read -r file; do
             if [ -n "$file" ]; then
               cp -v "$file" apk/ || echo "Failed to copy $file"
