@@ -1,0 +1,248 @@
+name: Build and Release Packages
+
+on:
+  push:
+    tags: ["v*"]  # 推送 v1.0.5 标签时触发
+  workflow_dispatch:  # 允许手动触发
+
+permissions:
+  contents: write  # 需要写入权限来创建 Release
+
+jobs:
+  # 构建 Go 二进制文件（多架构）
+  build-binary:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - go: mipsle
+            ipk: mipsel_24kc
+            sdk_target: ramips
+            sdk_subtarget: mt7621
+            env: CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat
+          - go: arm64
+            ipk: aarch64_cortex-a53
+            sdk_target: armsr
+            sdk_subtarget: armv8
+            env: CGO_ENABLED=0 GOOS=linux GOARCH=arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          check-latest: true
+          cache: true
+
+      - name: Build Go binary
+        run: |
+          go mod tidy
+          go mod verify
+          go mod download
+          ${{ matrix.env }} go build -ldflags="-s -w -X main.Version=${{ github.ref_name }}" -o HomeNet-Sentinel .
+          chmod +x HomeNet-Sentinel
+          file HomeNet-Sentinel
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.ipk }}
+          path: HomeNet-Sentinel
+          retention-days: 1
+
+  # 构建 IPK 包（OpenWrt 24.x 及以下）
+  build-ipk:
+    runs-on: ubuntu-latest
+    needs: build-binary
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ipk: mipsel_24kc
+          - ipk: aarch64_cortex-a53
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-${{ matrix.ipk }}
+          path: package/luci-app-homenet-sentinel/prebuilt/
+
+      - name: Install build tools
+        run: |
+          sudo apt update -y
+          sudo apt install -y binutils fakeroot file xz-utils curl
+          sudo curl -fsSL https://raw.githubusercontent.com/openwrt/openwrt/master/scripts/ipkg-build -o /usr/local/bin/ipkg-build
+          sudo chmod +x /usr/local/bin/ipkg-build
+
+      - name: Build IPK package
+        run: |
+          mkdir -p ipk
+          OUT_DIR="$(cd ipk && pwd)"
+          if [ ! -f "./build_ipk.sh" ]; then
+            echo "Error: build_ipk.sh not found!"
+            exit 1
+          fi
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          echo "Building IPK version: ${VERSION}-1"
+          sh ./build_ipk.sh --bin ./package/luci-app-homenet-sentinel/prebuilt/HomeNet-Sentinel --arch ${{ matrix.ipk }} --version "${VERSION}-1" --output "$OUT_DIR"
+
+      - name: List built packages
+        run: ls -la ipk/
+
+      - name: Upload IPK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipk-${{ matrix.ipk }}
+          path: ipk/*.ipk
+          if-no-files-found: error
+          retention-days: 7
+
+  # 构建 APK 包（OpenWrt 25.x+）
+  build-apk:
+    runs-on: ubuntu-latest
+    needs: build-binary
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ipk: mipsel_24kc
+            sdk_arch: mips_24kc
+          - ipk: aarch64_cortex-a53
+            sdk_arch: aarch64_cortex-a53
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-${{ matrix.ipk }}
+          path: package/luci-app-homenet-sentinel/prebuilt/
+
+      - name: Set binary permissions
+        run: |
+          chmod +x package/luci-app-homenet-sentinel/prebuilt/HomeNet-Sentinel
+          file package/luci-app-homenet-sentinel/prebuilt/HomeNet-Sentinel
+
+      - name: Update Makefile version
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          PKG_VERSION="${VERSION%-*}"
+          PKG_RELEASE="${VERSION##*-}"
+          [ -z "$PKG_RELEASE" ] && PKG_RELEASE=1
+          sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=$PKG_VERSION/" package/luci-app-homenet-sentinel/Makefile
+          sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=$PKG_RELEASE/" package/luci-app-homenet-sentinel/Makefile
+          echo "Updated Makefile:"
+          head -6 package/luci-app-homenet-sentinel/Makefile
+
+      - name: Build APK with OpenWrt SDK Docker
+        run: |
+          echo "=== Pulling OpenWrt SDK Docker image ==="
+          docker pull ghcr.io/openwrt/sdk:${{ matrix.sdk_arch }}
+          
+          echo "=== Building APK package ==="
+          docker run --rm \
+            -v $PWD:/workspace \
+            -w /workspace \
+            ghcr.io/openwrt/sdk:${{ matrix.sdk_arch }} \
+            sh -c '
+              set -e
+              echo "=== SDK Info ==="
+              cat /etc/openwrt_release 2>/dev/null || true
+              
+              echo "=== Setting up feeds ==="
+              # 创建 feeds.conf，将本地包目录链接进去
+              echo "src-link homenet /workspace/package/luci-app-homenet-sentinel" > feeds.conf
+              
+              # 更新和安装 feed
+              ./scripts/feeds update -a 2>&1 || true
+              ./scripts/feeds install -a 2>&1 || true
+              
+              echo "=== Building package ==="
+              make package/luci-app-homenet-sentinel/compile V=s 2>&1 || {
+                echo "Build failed, trying with IGNORE_ERRORS..."
+                make package/luci-app-homenet-sentinel/compile V=s IGNORE_ERRORS=1 2>&1 || true
+              }
+              
+              echo "=== Finding generated files ==="
+              echo "Searching for APK files..."
+              find bin -name "*.apk" -type f 2>/dev/null
+              echo "Searching for IPK files..."
+              find bin -name "*.ipk" -type f 2>/dev/null || true
+              echo "=== Listing bin directory ==="
+              ls -la bin/ 2>/dev/null || echo "No bin directory found"
+            '
+
+      - name: Find and collect APK files
+        run: |
+          mkdir -p apk
+          echo "=== Searching for package files ==="
+          find . -name "*.apk" -type f 2>/dev/null | tee /tmp/apk_files.txt || true
+          find . -name "*.ipk" -type f 2>/dev/null | tee /tmp/ipk_files.txt || true
+          
+          # 复制找到的文件到 apk 目录
+          while IFS= read -r file; do
+            if [ -n "$file" ]; then
+              cp "$file" apk/
+              echo "Copied: $file"
+            fi
+          done < /tmp/apk_files.txt
+          
+          echo "=== APK files found ==="
+          ls -la apk/ || echo "No APK files found"
+          
+          if [ -z "$(ls -A apk 2>/dev/null)" ]; then
+            echo "WARNING: No APK files were generated!"
+            echo "Listing current directory structure for debugging:"
+            find . -name "bin" -type d 2>/dev/null
+          fi
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ matrix.ipk }}
+          path: apk/*
+          if-no-files-found: warn
+          retention-days: 7
+
+  # 创建 GitHub Release
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-ipk, build-apk]
+    if: always() && needs.build-ipk.result == 'success' && (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List downloaded files
+        run: |
+          echo "=== All files ==="
+          find dist -type f -exec ls -la {} \;
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          files: |
+            dist/*.ipk
+            dist/*.apk
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
