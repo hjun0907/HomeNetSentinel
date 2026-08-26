@@ -1,51 +1,205 @@
-name: Build HomeNetSentinel MT7621 IPK
+name: Build and Release Packages
 
 on:
-  workflow_dispatch:
+  push:
+    tags: ["v*"]  # 推送 v1.0.5 标签时触发
+  workflow_dispatch:  # 允许手动触发
+
+permissions:
+  contents: write  # 需要写入权限来创建 Release
 
 jobs:
-  build:
-    runs-on: ubuntu-22.04
+  # 构建 Go 二进制文件（多架构）
+  build-binary:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - go: mipsle
+            ipk: mipsel_24kc
+            sdk_target: ramips
+            sdk_subtarget: mt7621
+            env: CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat
+          - go: arm64
+            ipk: aarch64_cortex-a53
+            sdk_target: armsr
+            sdk_subtarget: armv8
+            env: CGO_ENABLED=0 GOOS=linux GOARCH=arm64
+
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Chmod scripts
-        run: chmod +x build_ipk.sh
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          check-latest: true
+          cache: true
 
-      # 生成占位二进制（跳过 .NET MIPS 编译，因为官方不支持）
-      - name: Create dummy binary
+      - name: Build Go binary
         run: |
-          mkdir -p $HOME/.build/HomeNetSentinel/out-musl
-          echo "#dummy" > $HOME/.build/HomeNetSentinel/out-musl/HomeNetSentinel
-          chmod +x $HOME/.build/HomeNetSentinel/out-musl/HomeNetSentinel
+          go mod tidy
+          go mod verify
+          go mod download
+          ${{ matrix.env }} go build -ldflags="-s -w -X main.Version=${{ github.ref_name }}" -o HomeNet-Sentinel .
+          chmod +x HomeNet-Sentinel
+          file HomeNet-Sentinel
 
-      # 改用 24.10.1 + 浙大镜像（100% 可下）
-      - name: Download MT7621 SDK (fixed with retry & curl)
-  run: |
-    curl -L -o sdk.tar.zst \
-      https://mirror.zju.edu.cn/immortalwrt/releases/24.10.1/targets/ramips/mt7621/immortalwrt-sdk-24.10.1-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64.tar.zst \
-      --retry 10 --retry-delay 5 --connect-timeout 10 --max-time 180
-
-    tar -xf sdk.tar.zst -C $HOME/
-
-    mv $HOME/immortalwrt-sdk-24.10.1-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64 \
-       $HOME/immortalwrt-sdk-mt7621
-
-
-      # 打包 IPK（结构正确，后续替换二进制即可）
-      - name: Build IPK
-        run: |
-          ./build_ipk.sh \
-            --bin "$HOME/.build/HomeNetSentinel/out-musl/HomeNetSentinel" \
-            --arch mipsel_24kc \
-            --version 1.0.0-0 \
-            --output "$HOME/.build/ipk" \
-            --ipkg-build "$HOME/immortalwrt-sdk-mt7621/scripts/ipkg-build"
-
-      - name: Upload IPK
+      - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
-          name: mt7621-ipk
-          path: $HOME/.build/ipk/*.ipk
+          name: binary-${{ matrix.ipk }}
+          path: HomeNet-Sentinel
+          retention-days: 1
 
+  # 构建 IPK 包（OpenWrt 24.x 及以下）
+  build-ipk:
+    runs-on: ubuntu-latest
+    needs: build-binary
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ipk: mipsel_24kc
+          - ipk: aarch64_cortex-a53
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-${{ matrix.ipk }}
+          path: package/luci-app-homenet-sentinel/prebuilt/
+
+      - name: Install build tools
+        run: |
+          sudo apt update -y
+          sudo apt install -y binutils fakeroot file xz-utils curl
+          sudo curl -fsSL https://raw.githubusercontent.com/openwrt/openwrt/master/scripts/ipkg-build -o /usr/local/bin/ipkg-build
+          sudo chmod +x /usr/local/bin/ipkg-build
+
+      - name: Build IPK package
+        run: |
+          mkdir -p ipk
+          OUT_DIR="$(cd ipk && pwd)"
+          if [ ! -f "./build_ipk.sh" ]; then
+            echo "Error: build_ipk.sh not found!"
+            exit 1
+          fi
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          echo "Building IPK version: ${VERSION}-1"
+          sh ./build_ipk.sh --bin ./package/luci-app-homenet-sentinel/prebuilt/HomeNet-Sentinel --arch ${{ matrix.ipk }} --version "${VERSION}-1" --output "$OUT_DIR"
+
+      - name: List built packages
+        run: ls -la ipk/
+
+      - name: Upload IPK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipk-${{ matrix.ipk }}
+          path: ipk/*.ipk
+          if-no-files-found: error
+          retention-days: 7
+
+  # 构建 APK 包（OpenWrt 25.x+）
+  build-apk:
+    runs-on: ubuntu-latest
+    needs: build-binary
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ipk: mipsel_24kc
+            sdk_target: ramips
+            sdk_subtarget: mt7621
+          - ipk: aarch64_cortex-a53
+            sdk_target: armsr
+            sdk_subtarget: armv8
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-${{ matrix.ipk }}
+          path: package/luci-app-homenet-sentinel/prebuilt/
+
+      - name: Set binary permissions
+        run: |
+          chmod +x package/luci-app-homenet-sentinel/prebuilt/HomeNet-Sentinel
+          file package/luci-app-homenet-sentinel/prebuilt/HomeNet-Sentinel
+
+      - name: Update Makefile version
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          # 分离版本号和 release 号（如 1.0.5-1 -> 1.0.5 和 1）
+          PKG_VERSION="${VERSION%-*}"
+          PKG_RELEASE="${VERSION##*-}"
+          [ -z "$PKG_RELEASE" ] && PKG_RELEASE=1
+          sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=$PKG_VERSION/" package/luci-app-homenet-sentinel/Makefile
+          sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=$PKG_RELEASE/" package/luci-app-homenet-sentinel/Makefile
+          echo "Updated Makefile:"
+          head -6 package/luci-app-homenet-sentinel/Makefile
+
+      - name: Build APK package with OpenWrt SDK
+        uses: openwrt/gh-action-sdk@main
+        env:
+          ARCH: ${{ matrix.ipk }}-25.12.1
+          FEED_DIR: package/luci-app-homenet-sentinel
+          FEEDNAME: homenet
+          NO_DEFAULT_FEEDS: 1
+          IGNORE_ERRORS: 1
+
+      - name: Find and collect APK files
+        run: |
+          mkdir -p apk
+          find . -name "*.apk" -exec cp {} apk/ \; || true
+          echo "=== APK files found ==="
+          ls -la apk/ || true
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ matrix.ipk }}
+          path: apk/*.apk
+          if-no-files-found: warn
+          retention-days: 7
+
+  # 创建 GitHub Release
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-ipk, build-apk]
+    if: always() && (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List downloaded files
+        run: |
+          echo "=== All files ==="
+          find dist -type f -exec ls -la {} \;
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          files: |
+            dist/*.ipk
+            dist/*.apk
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
