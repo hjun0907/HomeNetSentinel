@@ -2,11 +2,11 @@ name: Build and Release Packages
 
 on:
   push:
-    tags: ["v*"]  # 推送 v1.0.5 标签时触发
-  workflow_dispatch:  # 允许手动触发
+    tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
-  contents: write  # 需要写入权限来创建 Release
+  contents: write
 
 jobs:
   # 构建 Go 二进制文件（多架构）
@@ -116,8 +116,10 @@ jobs:
         include:
           - ipk: mipsel_24kc
             sdk_arch: mips_24kc
+            sdk_image: ghcr.io/openwrt/sdk:mips_24kc
           - ipk: aarch64_cortex-a53
             sdk_arch: aarch64_cortex-a53
+            sdk_image: ghcr.io/openwrt/sdk:aarch64_cortex-a53
 
     steps:
       - name: Checkout code
@@ -149,58 +151,61 @@ jobs:
       - name: Build APK with OpenWrt SDK Docker
         run: |
           echo "=== Pulling OpenWrt SDK Docker image ==="
-          docker pull ghcr.io/openwrt/sdk:${{ matrix.sdk_arch }}
-          
+          docker pull ${{ matrix.sdk_image }}
+
           echo "=== Building APK package ==="
-          # 注意：使用 --user root 修复权限问题
-          # SDK 的工作目录是 /builder，需要在那里创建 feeds.conf 并运行构建
           docker run --rm \
             --user root \
             -v $PWD:/workspace \
-            ghcr.io/openwrt/sdk:${{ matrix.sdk_arch }} \
-            sh -c '
+            ${{ matrix.sdk_image }} \
+            /bin/bash -c '
               set -e
-              echo "=== SDK Info ==="
-              cat /etc/openwrt_release 2>/dev/null || true
-              
-              echo "=== SDK Build Directory ==="
+
+              echo "=== SDK Environment ==="
+              if [ -d "/builder" ]; then
+                cd /builder
+              else
+                echo "WARNING: /builder not found, using /"
+                cd /
+              fi
               pwd
               ls -la
-              
-              # 切换到 SDK 构建目录（通常是 /builder 或 /workspace）
-              # OpenWrt SDK 会在容器初始化时创建 /builder 目录
-              BUILD_DIR="/builder"
-              if [ ! -d "$BUILD_DIR" ]; then
-                BUILD_DIR="/workspace"
+
+              echo "=== Checking SDK structure ==="
+              if [ -f "./scripts/feeds" ]; then
+                echo "scripts/feeds found ✅"
+              else
+                echo "ERROR: scripts/feeds not found!"
+                find / -name "feeds" -type f 2>/dev/null | head -10
+                exit 1
               fi
-              echo "Using build directory: $BUILD_DIR"
-              cd "$BUILD_DIR"
-              
+
               echo "=== Setting up feeds ==="
-              # 在 SDK 构建目录创建 feeds.conf，指向挂载的包目录
               echo "src-link homenet /workspace/package/luci-app-homenet-sentinel" > feeds.conf
               cat feeds.conf
-              
-              # 更新和安装 feed
+
               echo "=== Updating feeds ==="
-              ./scripts/feeds update -a 2>&1 || true
-              
+              ./scripts/feeds update -a
+
               echo "=== Installing feeds ==="
-              ./scripts/feeds install -a 2>&1 || true
-              
+              ./scripts/feeds install -a
+
+              echo "=== Installing specific package ==="
+              ./scripts/feeds install luci-app-homenet-sentinel
+
               echo "=== Building package ==="
-              make package/luci-app-homenet-sentinel/compile V=s 2>&1 || {
-                echo "Build failed, trying with IGNORE_ERRORS..."
-                make package/luci-app-homenet-sentinel/compile V=s IGNORE_ERRORS=1 2>&1 || true
-              }
-              
+              make package/luci-app-homenet-sentinel/compile V=s
+
+              echo "=== Build completed successfully ==="
+
               echo "=== Finding generated files ==="
-              echo "Searching for APK files..."
-              find bin -name "*.apk" -type f 2>/dev/null
-              echo "Searching for IPK files..."
-              find bin -name "*.ipk" -type f 2>/dev/null || true
-              echo "=== Listing bin directory ==="
-              ls -la bin/ 2>/dev/null || echo "No bin directory found"
+              find ./bin -name "*.apk" -type f 2>/dev/null || echo "No APK found"
+              find ./bin -name "*.ipk" -type f 2>/dev/null || echo "No IPK found"
+
+              echo "=== Copying artifacts to /workspace ==="
+              mkdir -p /workspace/apk
+              find ./bin -name "*.apk" -type f -exec cp -v {} /workspace/apk/ \;
+              find ./bin -name "*.ipk" -type f -exec cp -v {} /workspace/apk/ \;
             '
 
       - name: Find and collect APK files
@@ -209,29 +214,25 @@ jobs:
           echo "=== Searching for package files ==="
           find . -name "*.apk" -type f 2>/dev/null | tee /tmp/apk_files.txt || true
           find . -name "*.ipk" -type f 2>/dev/null | tee /tmp/ipk_files.txt || true
-          
-          # 复制找到的文件到 apk 目录
+
           while IFS= read -r file; do
             if [ -n "$file" ]; then
-              cp "$file" apk/
-              echo "Copied: $file"
+              cp -v "$file" apk/ || echo "Failed to copy $file"
             fi
           done < /tmp/apk_files.txt
-          
+
           echo "=== APK files found ==="
           ls -la apk/ || echo "No APK files found"
-          
+
           if [ -z "$(ls -A apk 2>/dev/null)" ]; then
             echo "WARNING: No APK files were generated!"
-            echo "Listing current directory structure for debugging:"
-            find . -name "bin" -type d 2>/dev/null
           fi
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: apk-${{ matrix.ipk }}
-          path: apk/*
+          path: apk/
           if-no-files-found: warn
           retention-days: 7
 
