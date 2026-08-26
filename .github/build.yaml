@@ -115,9 +115,9 @@ jobs:
       matrix:
         include:
           - ipk: mipsel_24kc
-            docker_arch: mipsel_24kc
+            sdk_arch: mips_24kc
           - ipk: aarch64_cortex-a53
-            docker_arch: aarch64_cortex-a53
+            sdk_arch: aarch64_cortex-a53
 
     steps:
       - name: Checkout code
@@ -148,43 +148,71 @@ jobs:
 
       - name: Build APK with OpenWrt SDK Docker
         run: |
-          # 使用 OpenWrt 25.12 SDK Docker 镜像构建 APK 包
+          echo "=== Pulling OpenWrt SDK Docker image ==="
+          docker pull ghcr.io/openwrt/sdk:${{ matrix.sdk_arch }}
+          
+          echo "=== Building APK package ==="
           docker run --rm \
             -v $PWD:/workspace \
             -w /workspace \
-            openwrt/sdk:${{ matrix.docker_arch }}-25.12.1 \
+            ghcr.io/openwrt/sdk:${{ matrix.sdk_arch }} \
             sh -c '
               set -e
               echo "=== SDK Info ==="
               cat /etc/openwrt_release 2>/dev/null || true
+              
               echo "=== Setting up feeds ==="
+              # 创建 feeds.conf，将本地包目录链接进去
               echo "src-link homenet /workspace/package/luci-app-homenet-sentinel" > feeds.conf
-              ./scripts/feeds update homenet
-              ./scripts/feeds install -p homenet -f luci-app-homenet-sentinel
+              
+              # 更新和安装 feed
+              ./scripts/feeds update -a 2>&1 || true
+              ./scripts/feeds install -a 2>&1 || true
+              
               echo "=== Building package ==="
               make package/luci-app-homenet-sentinel/compile V=s 2>&1 || {
                 echo "Build failed, trying with IGNORE_ERRORS..."
                 make package/luci-app-homenet-sentinel/compile V=s IGNORE_ERRORS=1 2>&1 || true
               }
-              echo "=== Finding APK files ==="
-              find bin -name "*.apk" -type f 2>/dev/null || echo "No APK files found"
+              
+              echo "=== Finding generated files ==="
+              echo "Searching for APK files..."
+              find bin -name "*.apk" -type f 2>/dev/null
+              echo "Searching for IPK files..."
+              find bin -name "*.ipk" -type f 2>/dev/null || true
+              echo "=== Listing bin directory ==="
+              ls -la bin/ 2>/dev/null || echo "No bin directory found"
             '
 
       - name: Find and collect APK files
         run: |
           mkdir -p apk
-          find . -name "*.apk" -type f -exec cp {} apk/ \; || true
+          echo "=== Searching for package files ==="
+          find . -name "*.apk" -type f 2>/dev/null | tee /tmp/apk_files.txt || true
+          find . -name "*.ipk" -type f 2>/dev/null | tee /tmp/ipk_files.txt || true
+          
+          # 复制找到的文件到 apk 目录
+          while IFS= read -r file; do
+            if [ -n "$file" ]; then
+              cp "$file" apk/
+              echo "Copied: $file"
+            fi
+          done < /tmp/apk_files.txt
+          
           echo "=== APK files found ==="
-          ls -la apk/ || true
+          ls -la apk/ || echo "No APK files found"
+          
           if [ -z "$(ls -A apk 2>/dev/null)" ]; then
             echo "WARNING: No APK files were generated!"
+            echo "Listing current directory structure for debugging:"
+            find . -name "bin" -type d 2>/dev/null
           fi
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: apk-${{ matrix.ipk }}
-          path: apk/*.apk
+          path: apk/*
           if-no-files-found: warn
           retention-days: 7
 
