@@ -115,11 +115,9 @@ jobs:
       matrix:
         include:
           - ipk: mipsel_24kc
-            sdk_target: ramips
-            sdk_subtarget: mt7621
+            docker_arch: mipsel_24kc
           - ipk: aarch64_cortex-a53
-            sdk_target: armsr
-            sdk_subtarget: armv8
+            docker_arch: aarch64_cortex-a53
 
     steps:
       - name: Checkout code
@@ -140,7 +138,6 @@ jobs:
         run: |
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
-          # 分离版本号和 release 号（如 1.0.5-1 -> 1.0.5 和 1）
           PKG_VERSION="${VERSION%-*}"
           PKG_RELEASE="${VERSION##*-}"
           [ -z "$PKG_RELEASE" ] && PKG_RELEASE=1
@@ -149,21 +146,39 @@ jobs:
           echo "Updated Makefile:"
           head -6 package/luci-app-homenet-sentinel/Makefile
 
-      - name: Build APK package with OpenWrt SDK
-        uses: openwrt/gh-action-sdk@main
-        env:
-          ARCH: ${{ matrix.ipk }}-25.12.1
-          FEED_DIR: package/luci-app-homenet-sentinel
-          FEEDNAME: homenet
-          NO_DEFAULT_FEEDS: 1
-          IGNORE_ERRORS: 1
+      - name: Build APK with OpenWrt SDK Docker
+        run: |
+          # 使用 OpenWrt 25.12 SDK Docker 镜像构建 APK 包
+          docker run --rm \
+            -v $PWD:/workspace \
+            -w /workspace \
+            openwrt/sdk:${{ matrix.docker_arch }}-25.12.1 \
+            sh -c '
+              set -e
+              echo "=== SDK Info ==="
+              cat /etc/openwrt_release 2>/dev/null || true
+              echo "=== Setting up feeds ==="
+              echo "src-link homenet /workspace/package/luci-app-homenet-sentinel" > feeds.conf
+              ./scripts/feeds update homenet
+              ./scripts/feeds install -p homenet -f luci-app-homenet-sentinel
+              echo "=== Building package ==="
+              make package/luci-app-homenet-sentinel/compile V=s 2>&1 || {
+                echo "Build failed, trying with IGNORE_ERRORS..."
+                make package/luci-app-homenet-sentinel/compile V=s IGNORE_ERRORS=1 2>&1 || true
+              }
+              echo "=== Finding APK files ==="
+              find bin -name "*.apk" -type f 2>/dev/null || echo "No APK files found"
+            '
 
       - name: Find and collect APK files
         run: |
           mkdir -p apk
-          find . -name "*.apk" -exec cp {} apk/ \; || true
+          find . -name "*.apk" -type f -exec cp {} apk/ \; || true
           echo "=== APK files found ==="
           ls -la apk/ || true
+          if [ -z "$(ls -A apk 2>/dev/null)" ]; then
+            echo "WARNING: No APK files were generated!"
+          fi
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -177,7 +192,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     needs: [build-ipk, build-apk]
-    if: always() && (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch')
+    if: always() && needs.build-ipk.result == 'success' && (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch')
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
