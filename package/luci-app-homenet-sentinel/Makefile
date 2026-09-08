@@ -13,7 +13,7 @@ define Package/luci-app-homenet-sentinel
   CATEGORY:=LuCI
   SUBMENU:=3. Applications
   TITLE:=LuCI support for HomeNet Sentinel
-  DEPENDS:=+libpthread +luci-base
+  DEPENDS:=+luci-base
 endef
 
 define Package/luci-app-homenet-sentinel/description
