@@ -2,16 +2,14 @@ name: Build and Release Packages
 
 on:
   push:
-    tags: ["v*"]
-  workflow_dispatch:
+    tags: ["v*"]  # 推送 v1.0.5 标签时触发
+  workflow_dispatch:  # 允许手动触发
 
 permissions:
-  contents: write
+  contents: write  # 需要写入权限来创建 Release
 
 jobs:
-  # ============================================
   # 构建 Go 二进制文件（多架构）
-  # ============================================
   build-binary:
     runs-on: ubuntu-latest
     strategy:
@@ -20,9 +18,13 @@ jobs:
         include:
           - go: mipsle
             ipk: mipsel_24kc
+            sdk_target: ramips
+            sdk_subtarget: mt7621
             env: CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat
           - go: arm64
             ipk: aarch64_cortex-a53
+            sdk_target: armsr
+            sdk_subtarget: armv8
             env: CGO_ENABLED=0 GOOS=linux GOARCH=arm64
 
     steps:
@@ -52,9 +54,7 @@ jobs:
           path: HomeNet-Sentinel
           retention-days: 1
 
-  # ============================================
   # 构建 IPK 包（OpenWrt 24.x 及以下）
-  # ============================================
   build-ipk:
     runs-on: ubuntu-latest
     needs: build-binary
@@ -106,9 +106,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # ============================================
-  # 构建 APK 包（OpenWrt 25.x+）使用官方 SDK
-  # ============================================
+  # 构建 APK 包（OpenWrt 25.x+）
   build-apk:
     runs-on: ubuntu-latest
     needs: build-binary
@@ -117,9 +115,9 @@ jobs:
       matrix:
         include:
           - ipk: mipsel_24kc
-            sdk_url: "https://downloads.openwrt.org/releases/23.05.0/targets/ramips/mt7621/openwrt-sdk-23.05.0-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+            sdk_arch: mips_24kc
           - ipk: aarch64_cortex-a53
-            sdk_url: "https://downloads.openwrt.org/releases/23.05.0/targets/armsr/armv8/openwrt-sdk-23.05.0-armsr-armv8_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+            sdk_arch: aarch64_cortex-a53
 
     steps:
       - name: Checkout code
@@ -131,149 +129,98 @@ jobs:
           name: binary-${{ matrix.ipk }}
           path: package/luci-app-homenet-sentinel/prebuilt/
 
-      - name: Check binary exists
+      - name: Set binary permissions
         run: |
-          echo "=== Checking binary ==="
-          ls -la package/luci-app-homenet-sentinel/prebuilt/
-          file package/luci-app-homenet-sentinel/prebuilt/HomeNet-Sentinel || echo "Binary not found!"
+          chmod +x package/luci-app-homenet-sentinel/prebuilt/HomeNet-Sentinel
+          file package/luci-app-homenet-sentinel/prebuilt/HomeNet-Sentinel
 
       - name: Update Makefile version
         run: |
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
-          PKG_VERSION="${VERSION%-*}"
-          PKG_RELEASE="${VERSION##*-}"
-          [ -z "$PKG_RELEASE" ] && PKG_RELEASE=1
+          if [[ "$VERSION" == *-* ]]; then
+            PKG_VERSION="${VERSION%-*}"
+            PKG_RELEASE="${VERSION##*-}"
+          else
+            PKG_VERSION="$VERSION"
+            PKG_RELEASE=1
+          fi
           sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=$PKG_VERSION/" package/luci-app-homenet-sentinel/Makefile
           sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=$PKG_RELEASE/" package/luci-app-homenet-sentinel/Makefile
           echo "Updated Makefile:"
-          head -8 package/luci-app-homenet-sentinel/Makefile
+          head -6 package/luci-app-homenet-sentinel/Makefile
 
-      - name: Build APK with OpenWrt SDK
+      - name: Build APK with OpenWrt SDK Docker
         run: |
           mkdir -p apk
-
+          # OpenWrt snapshot / 25.x 使用 APK 包格式，通过官方 SDK 容器编译。
+          # 注意 1：新版 SDK 镜像的 /builder 内只有 setup.sh，首次运行必须先执行它下载并解压 SDK；
+          # 注意 2：/builder/bin 挂载到宿主机，否则容器 --rm 退出后产物会丢失；
+          # 注意 3：src-link 必须指向“包含包目录的目录”（package/），不能直接指向包目录本身。
           docker run --rm \
             --user root \
-            -v $PWD:/workspace \
-            ubuntu:22.04 \
-            /bin/bash -c '
+            -v "$PWD:/workspace" \
+            -v "$PWD/apk:/builder/bin" \
+            ghcr.io/openwrt/sdk:${{ matrix.sdk_arch }} \
+            bash -c '
               set -e
+              cd /builder
 
-              echo "=== Installing all dependencies ==="
-              apt update -y
-              apt install -y \
-                wget xz-utils tar make gcc g++ \
-                libncurses-dev zlib1g-dev gawk flex bison \
-                git python3 python3-dev rsync unzip file \
-                time \
-                bzip2 \
-                build-essential \
-                libssl-dev \
-                gettext \
-                xsltproc \
-                docbook-xsl \
-                patch \
-                perl \
-                findutils \
-                diffutils \
-                cpio \
-                bc \
-                cpp \
-                binutils \
-                libelf-dev \
-                libtool \
-                automake \
-                autoconf \
-                pkg-config
+              echo "=== Bootstrapping SDK (first run downloads the SDK) ==="
+              if [ ! -d scripts ]; then
+                ./setup.sh
+              fi
 
-              echo "=== Downloading OpenWrt SDK ==="
-              cd /workspace
-              SDK_URL="${{ matrix.sdk_url }}"
-              echo "SDK URL: $SDK_URL"
-              wget -O sdk.tar.xz "$SDK_URL"
-
-              echo "=== Extracting SDK ==="
-              mkdir -p sdk
-              tar -xJf sdk.tar.xz -C sdk --strip-components=1
-              cd sdk
-
-              echo "=== SDK structure ==="
-              ls -la
-              ls -la scripts/ | head -10
-
-              echo "=== Checking our package ==="
-              ls -la /workspace/package/luci-app-homenet-sentinel/
-              ls -la /workspace/package/luci-app-homenet-sentinel/prebuilt/
-
-              echo "=== Setting up feeds ==="
-              echo "src-link homenet /workspace/package/luci-app-homenet-sentinel" > feeds.conf
+              echo "=== Registering custom feed ==="
+              [ -f feeds.conf ] || cp feeds.conf.default feeds.conf
+              # 官方示例同样将 feed 源替换为 GitHub 镜像，避免 git.openwrt.org 不稳定
+              sed -i -E "s;git.openwrt.org/(feed|project|openwrt);github.com/openwrt;" feeds.conf
+              echo "src-link homenet /workspace/package" >> feeds.conf
               cat feeds.conf
 
               echo "=== Updating feeds ==="
               ./scripts/feeds update -a
 
-              echo "=== Installing feeds ==="
+              echo "=== Installing feed packages ==="
               ./scripts/feeds install -a
 
-              echo "=== Installing specific package ==="
-              ./scripts/feeds install luci-app-homenet-sentinel
+              echo "=== Generating default config ==="
+              make defconfig
 
-              echo "=== Listing installed feeds ==="
-              ./scripts/feeds list | grep homenet || echo "Package not found in feeds!"
+              echo "=== Building package ==="
+              make package/luci-app-homenet-sentinel/clean V=s
+              make package/luci-app-homenet-sentinel/compile -j"$(nproc)" V=s
 
-              echo "=== Building package with verbose logs ==="
-              make package/luci-app-homenet-sentinel/compile V=s 2>&1 | tee build.log || {
-                echo "=== Build failed ==="
-                echo "=== Last 200 lines of build.log ==="
-                tail -200 build.log
-                echo "=== Checking Makefile syntax ==="
-                make -n package/luci-app-homenet-sentinel/compile 2>&1 || echo "Makefile check failed"
-                exit 1
-              }
-
-              echo "=== Build completed ==="
-
-              echo "=== Copying artifacts ==="
-              mkdir -p /workspace/apk
-              find ./bin -name "*.apk" -type f -exec cp -v {} /workspace/apk/ \; 2>/dev/null || echo "No APK files found"
-              find ./bin -name "*.ipk" -type f -exec cp -v {} /workspace/apk/ \; 2>/dev/null || echo "No IPK files found"
-
-              echo "=== Artifacts copied ==="
-              ls -la /workspace/apk/ || echo "No artifacts"
+              echo "=== Generated APK files ==="
+              find bin -name "*.apk" -type f
             '
 
-      - name: Find and collect APK files
+      - name: Collect APK files
         run: |
-          echo "=== Searching for package files ==="
-          find . -name "*.apk" -type f 2>/dev/null | tee /tmp/apk_files.txt || true
-          find . -name "*.ipk" -type f 2>/dev/null | tee /tmp/ipk_files.txt || true
+          echo "=== APK files generated by SDK ==="
+          find apk -name "*.apk" -type f -print
 
-          mkdir -p apk
-          while IFS= read -r file; do
-            if [ -n "$file" ]; then
-              cp -v "$file" apk/ || echo "Failed to copy $file"
-            fi
-          done < /tmp/apk_files.txt
+          # 拍平到 apk/ 根目录，并加上架构后缀，避免多架构产物同名互相覆盖
+          find apk -name "*.apk" -type f | while IFS= read -r f; do
+            cp "$f" "apk/$(basename "$f" .apk)_${{ matrix.sdk_arch }}.apk"
+          done
 
-          echo "=== APK files found ==="
-          ls -la apk/ || echo "No APK files found"
+          echo "=== Final APK artifacts ==="
+          ls -la apk/*.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: apk-${{ matrix.ipk }}
-          path: apk/
-          if-no-files-found: warn
+          path: apk/*.apk
+          if-no-files-found: error
           retention-days: 7
 
-  # ============================================
   # 创建 GitHub Release
-  # ============================================
   release:
     runs-on: ubuntu-latest
     needs: [build-ipk, build-apk]
-    if: always() && needs.build-ipk.result == 'success' && (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch')
+    if: always() && needs.build-ipk.result == 'success' && needs.build-apk.result == 'success' && (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch')
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
