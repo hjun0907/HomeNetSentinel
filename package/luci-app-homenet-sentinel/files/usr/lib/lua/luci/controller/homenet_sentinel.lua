@@ -9,6 +9,42 @@ function index()
     entry({"admin", "services", "homenet-sentinel", "status"}, call("action_status")).leaf = true
 end
 
+-- 采集所有无线接口关联终端的信号强度，返回 { [MAC小写] = 信号dBm }
+local function collect_wifi_signals(util)
+    local signals = {}
+
+    local ok, iwinfo = pcall(require, "iwinfo")
+    if ok and iwinfo then
+        -- 枚举 /sys/class/net 下的无线接口（存在 wireless 子目录）
+        local ifs = util.exec("ls -1 /sys/class/net 2>/dev/null") or ""
+        for ifname in ifs:gmatch("%S+") do
+            if nixio.fs.access("/sys/class/net/" .. ifname .. "/wireless") then
+                local backend = iwinfo.type and iwinfo.type(ifname)
+                local iw = backend and iwinfo[backend]
+                local ok_list, list = pcall(function() return iw and iw.assoclist(ifname) end)
+                if ok_list and type(list) == "table" then
+                    for m, info in pairs(list) do
+                        if type(info) == "table" and info.signal and info.signal ~= 0 then
+                            signals[m:lower()] = info.signal
+                        end
+                    end
+                end
+            end
+        end
+        return signals
+    end
+
+    -- 回退：解析 iwinfo 命令行输出
+    local out = util.exec("iwinfo 2>/dev/null") or ""
+    for ifname in out:gmatch("(%w+)%s+ESSID") do
+        local a = util.exec("iwinfo " .. ifname .. " assoclist 2>/dev/null") or ""
+        for mac, sig in a:gmatch("(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)%s+(-?%d+)%s*dBm") do
+            signals[mac:lower()] = tonumber(sig)
+        end
+    end
+    return signals
+end
+
 function action_status()
     local http = require "luci.http"
     local sys = require "luci.sys"
@@ -32,24 +68,36 @@ function action_status()
         util.exec("sleep 3")
     end
 
-    -- 仅 REACHABLE/PERMANENT 视为在线（STALE/DELAY/PROBE 为未确认状态，可能已离线）
-    local online_states = { REACHABLE = true, PERMANENT = true }
+    local signals = collect_wifi_signals(util)
+
     local targets = {}
-    for _, t in ipairs(target_list) do
+    for idx, t in ipairs(target_list) do
         local out = util.trim(util.exec("ip neigh show " .. t.ip .. " 2>/dev/null") or "")
-        local nud = "NONE"
+        local nud, mac = "NONE", nil
         if out ~= "" then
             local fields = {}
             for f in out:gmatch("%S+") do
                 fields[#fields + 1] = f
             end
             nud = fields[#fields] or "NONE"
+            for i = 1, #fields - 1 do
+                if fields[i] == "lladdr" then
+                    mac = fields[i + 1]
+                end
+            end
         end
+
+        local online = (nud == "REACHABLE" or nud == "PERMANENT")
+        local sig = mac and signals[mac:lower()] or nil
+
         targets[#targets + 1] = {
+            idx = idx - 1,
             name = t.name,
             ip = t.ip,
+            mac = mac,
             nud = nud,
-            online = online_states[nud] == true
+            signal = sig,
+            online = online
         }
     end
 

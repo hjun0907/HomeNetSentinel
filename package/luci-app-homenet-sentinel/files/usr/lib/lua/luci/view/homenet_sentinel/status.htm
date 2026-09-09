@@ -1,54 +1,140 @@
+<%
+local sys = require "luci.sys"
+local uci = require "luci.model.uci".cursor()
+local running = (sys.call("/etc/init.d/homenet-sentinel status >/dev/null 2>&1") == 0)
+
+-- 统计目标数量
+local target_count = 0
+uci:foreach("homenet-sentinel", "target", function(s)
+    if s.ip and s.ip ~= "" then target_count = target_count + 1 end
+end)
+%>
+
+<style>
+.hns-wrap { margin: 10px 0; }
+.hns-banner {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 16px; border-radius: 10px; margin-bottom: 14px;
+    background: rgba(34,197,94,0.08); border: 1px solid rgba(34,197,94,0.35);
+    color: #22c55e; font-weight: bold; font-size: 14px;
+}
+.hns-banner.stopped {
+    background: rgba(239,68,68,0.08); border-color: rgba(239,68,68,0.35); color: #ef4444;
+}
+.hns-banner .dot { width: 10px; height: 10px; border-radius: 50%; background: currentColor; }
+.hns-table {
+    width: 100%; border-collapse: collapse;
+    background: rgba(255,255,255,0.02);
+    border-radius: 12px; overflow: hidden;
+}
+.hns-table th {
+    text-align: left; font-size: 13px; font-weight: bold; color: #9ca3af;
+    padding: 12px 16px; border-bottom: 1px solid rgba(255,255,255,0.08);
+    white-space: nowrap;
+}
+.hns-table td {
+    padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,0.05);
+    font-size: 14px; color: #e5e7eb; vertical-align: middle;
+}
+.hns-table tr:last-child td { border-bottom: none; }
+.hns-dev { display: flex; align-items: center; gap: 12px; }
+.hns-avatar {
+    width: 42px; height: 42px; border-radius: 10px; flex: none;
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 19px; font-weight: bold;
+}
+.hns-dev-name { font-weight: bold; color: #f3f4f6; line-height: 1.4; }
+.hns-dev-mac { font-size: 12px; color: #9ca3af; }
+.hns-ip { color: #60a5fa; font-weight: 600; }
+.hns-state { font-weight: bold; white-space: nowrap; }
+.hns-online { color: #22c55e; }
+.hns-active { color: #2dd4bf; }
+.hns-offline { color: #6b7280; }
+.hns-sig-good { color: #22c55e; }
+.hns-sig-mid { color: #f59e0b; }
+.hns-sig-bad { color: #ef4444; }
+.hns-empty { padding: 24px; text-align: center; color: #9ca3af; font-size: 14px; }
+</style>
+
+<div class="hns-wrap">
+    <div id="hns-banner" class="hns-banner<% if not running then %> stopped<% end %>">
+        <span class="dot"></span>
+        <span><% if running then %><%:服务运行中，正在监控 %><%=target_count%><%: 台设备%><% else %><%:服务未运行——请在下方基础设置中启用并填写 MQTT 配置%><% end %></span>
+    </div>
+
+    <table class="hns-table">
+        <thead>
+            <tr>
+                <th><%:终端信息%></th>
+                <th><%:IP 地址%></th>
+                <th><%:信号强度%></th>
+                <th><%:在线状态%></th>
+            </tr>
+        </thead>
+        <tbody id="hns-rows">
+            <tr><td colspan="4" class="hns-empty"><%:检测中...%></td></tr>
+        </tbody>
+    </table>
+</div>
+
 <script type="text/javascript">
 //<![CDATA[
-XHR.poll(5, '<%=luci.dispatcher.build_url("admin", "services", "homenet-sentinel", "status")%>', null,
-    function(_, data) {
-        var el = document.getElementById('hns-service-status');
-        if (el && data) {
-            if (data.running) {
-                el.innerHTML = '<span style="color:#008800;font-weight:bold"><%:运行中%></span>';
-            } else {
-                el.innerHTML = '<span style="color:#cc0000;font-weight:bold"><%:未运行%></span>';
-            }
+(function() {
+    var AVATAR_COLORS = ['#f97316', '#06b6d4', '#6366f1', '#22c55e', '#ec4899', '#eab308', '#ef4444', '#8b5cf6'];
+
+    function esc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"]/g, function(c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+        });
+    }
+
+    function sigHtml(sig) {
+        if (sig == null) return '<span style="color:#6b7280">—</span>';
+        var cls = sig >= -60 ? 'hns-sig-good' : (sig >= -75 ? 'hns-sig-mid' : 'hns-sig-bad');
+        return '<span class="' + cls + '">' + sig + ' dBm</span>';
+    }
+
+    function render(targets) {
+        var tb = document.getElementById('hns-rows');
+        if (!tb) return;
+
+        if (!targets || targets.length === 0) {
+            tb.innerHTML = '<tr><td colspan="4" class="hns-empty"><%:未配置监控目标，可在下方"在家检测目标"中添加设备%></td></tr>';
+            return;
         }
 
-        var list = document.getElementById('hns-target-list');
-        if (list && data) {
-            var targets = data.targets || [];
-            if (targets.length === 0) {
-                list.innerHTML = '<em><%:未配置监控目标，可在下方“在家检测目标”中添加。%></em>';
+        var html = '';
+        for (var i = 0; i < targets.length; i++) {
+            var t = targets[i];
+            var color = AVATAR_COLORS[(t.idx != null ? t.idx : i) % AVATAR_COLORS.length];
+            var initial = (t.name || '?').charAt(0).toUpperCase();
+
+            var stateHtml;
+            if (t.online) {
+                stateHtml = '<span class="hns-state hns-active">● <%:活跃%></span>';
             } else {
-                var html = '<table class="cbi-section-table" style="width:100%">'
-                    + '<tr class="cbi-section-table-titles">'
-                    + '<th class="cbi-section-table-cell"><%:名称%></th>'
-                    + '<th class="cbi-section-table-cell"><%:IP 地址%></th>'
-                    + '<th class="cbi-section-table-cell"><%:状态%></th>'
-                    + '</tr>';
-                for (var i = 0; i < targets.length; i++) {
-                    var t = targets[i];
-                    var stateHtml = t.online
-                        ? '<span style="color:#008800;font-weight:bold">● <%:在线%></span>'
-                        : '<span style="color:#cc0000;font-weight:bold">○ <%:离线%></span>';
-                    html += '<tr class="cbi-section-table-row">'
-                        + '<td class="cbi-section-table-cell">' + t.name + '</td>'
-                        + '<td class="cbi-section-table-cell">' + t.ip + '</td>'
-                        + '<td class="cbi-section-table-cell">' + stateHtml + '</td>'
-                        + '</tr>';
-                }
-                html += '</table>';
-                list.innerHTML = html;
+                stateHtml = '<span class="hns-state hns-offline">○ <%:离线%></span>';
             }
+
+            html += '<tr>'
+                + '<td><div class="hns-dev">'
+                +   '<div class="hns-avatar" style="background:' + color + '">' + esc(initial) + '</div>'
+                +   '<div><div class="hns-dev-name">' + esc(t.name) + '</div>'
+                +     '<div class="hns-dev-mac">' + (t.mac ? esc(t.mac) : '—') + '</div></div>'
+                + '</div></td>'
+                + '<td><span class="hns-ip">' + esc(t.ip) + '</span></td>'
+                + '<td>' + sigHtml(t.signal) + '</td>'
+                + '<td>' + stateHtml + '</td>'
+                + '</tr>';
         }
+        tb.innerHTML = html;
     }
-);
+
+    XHR.poll(6, '<%=luci.dispatcher.build_url("admin", "services", "homenet-sentinel", "status")%>', null,
+        function(_, data) {
+            if (data) render(data.targets);
+        }
+    );
+})();
 //]]>
 </script>
-
-<fieldset class="cbi-section">
-    <legend><%:运行状态%></legend>
-    <p id="hns-service-status"><%:检测中...%></p>
-</fieldset>
-
-<fieldset class="cbi-section">
-    <legend><%:设备在线状态%></legend>
-    <div id="hns-target-list"><em><%:检测中...%></em></div>
-</fieldset>
