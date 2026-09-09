@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"HomeNetSentinel/config"
@@ -20,6 +22,9 @@ const (
 	baseTopic       = "lan/presence"
 	targetStateFile = "/etc/homenet-sentinel/target_ids"
 	connInterval    = 30 * time.Second
+	// probeInterval 主动向每个目标发 ping 的间隔：强制内核刷新 ARP/NUD，
+	// 避免设备离线后 STALE 条目残留导致误判为在线
+	probeInterval = 8 * time.Second
 )
 
 // ---------- HA 发现 JSON 结构 ----------
@@ -204,6 +209,15 @@ func readUbusStatus(iface string) *wanStatus {
 }
 
 // ---------- 邻居表（ARP/NUD）在场检测 ----------
+
+// probeNeighbor 向目标发送一次 ping，强制内核发起 ARP 解析/重新校验 NUD。
+// 不关心 ping 是否收到 ICMP 应答：设备在线时其协议栈必然回复 ARP，NUD 变为 REACHABLE；
+// 设备离线时 ARP 无应答，条目转为 FAILED/INCOMPLETE 并被回收。
+func probeNeighbor(ip string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = exec.CommandContext(ctx, "/bin/ping", "-c", "1", "-W", "1", ip).Run()
+}
 
 func neighborState(ip string) string {
 	out, err := exec.Command("/sbin/ip", "neigh", "show", ip).Output()
@@ -424,6 +438,7 @@ func main() {
 
 	// 主循环状态
 	lastStates := map[string]string{}
+	lastProbe := map[string]time.Time{}
 	hasPublishedAggregate := false
 	lastRxGb, lastTxGb := int64(-1), int64(-1)
 	lastIpv4, lastIpv6Pd := "", ""
@@ -436,7 +451,21 @@ func main() {
 	for range ticker.C {
 		now := time.Now()
 
-		// 1. 在场检测
+		// 1. 在场检测：先对到期的目标主动 ping（强制 ARP 校验），再读邻居表
+		var probeWg sync.WaitGroup
+		for _, t := range cfg.Targets {
+			id := toID(t.IP)
+			if now.Sub(lastProbe[id]) >= probeInterval {
+				lastProbe[id] = now
+				probeWg.Add(1)
+				go func(ip string) {
+					defer probeWg.Done()
+					probeNeighbor(ip)
+				}(t.IP)
+			}
+		}
+		probeWg.Wait()
+
 		devices := make(map[string]deviceState, len(cfg.Targets))
 		onlineCount := 0
 		anyChanged := false
