@@ -17,13 +17,6 @@ type Config struct {
 }
 
 func Load() Config {
-	get := func(key, def string) string {
-		if v := os.Getenv(key); v != "" {
-			return v
-		}
-		return def
-	}
-
 	// 支持 HNS_ 前缀的环境变量
 	getHNS := func(key, def string) string {
 		if v := os.Getenv("HNS_" + key); v != "" {
