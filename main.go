@@ -21,7 +21,10 @@ const (
 	discoveryPrefix = "homeassistant"
 	baseTopic       = "lan/presence"
 	targetStateFile = "/etc/homenet-sentinel/target_ids"
-	connInterval    = 30 * time.Second
+	// stateFile 守护进程写出的实时状态（防抖后结论），LuCI 状态页只读此文件，
+	// 不再自行做删邻居条目/ping 等破坏性探测，避免两个探测者互相干扰导致状态抖动
+	stateFile    = "/tmp/homenet-sentinel/state.json"
+	connInterval = 30 * time.Second
 	// probeInterval 主动向每个目标发 ping 的间隔：强制内核刷新 ARP/NUD，
 	// 避免设备离线后 STALE 条目残留导致误判为在线
 	probeInterval = 8 * time.Second
@@ -82,6 +85,7 @@ type textDiscovery struct {
 type deviceState struct {
 	Name      string `json:"name"`
 	IP        string `json:"ip"`
+	Mac       string `json:"mac"`
 	Status    string `json:"status"`
 	Nud       string `json:"nud"`
 	Online    bool   `json:"online"`
@@ -219,8 +223,9 @@ func probeNeighbor(ip string) {
 
 	_ = exec.CommandContext(ctx, "/sbin/ip", "neigh", "del", ip, "dev", neighborDev(ctx, ip)).Run()
 	_ = exec.CommandContext(ctx, "/bin/ping", "-c", "1", "-W", "1", ip).Run()
-	// 等待广播 ARP 探测完成（在线手机即使在省电模式也会由固件在 DTIM 内应答 ARP）
-	time.Sleep(2 * time.Second)
+	// 等待广播 ARP 探测完成（在线手机即使在省电模式也会由固件在 DTIM 内应答 ARP；
+	// 留 3 秒余量，避免偶发应答慢导致单次探测失败）
+	time.Sleep(3 * time.Second)
 }
 
 // neighborDev 解析目标所在的网络接口（如 br-lan），用于删除邻居条目
@@ -237,17 +242,24 @@ func neighborDev(ctx context.Context, ip string) string {
 	return "br-lan"
 }
 
-func neighborState(ip string) string {
+// neighborInfo 查询目标的邻居表条目，返回 NUD 状态与 MAC 地址（lladdr）
+func neighborInfo(ip string) (nud string, mac string) {
 	out, err := exec.Command("/sbin/ip", "neigh", "show", ip).Output()
 	if err != nil {
-		return "ERROR"
+		return "ERROR", ""
 	}
 	s := strings.TrimSpace(string(out))
 	if s == "" {
-		return "NONE"
+		return "NONE", ""
 	}
 	fields := strings.Fields(s)
-	return fields[len(fields)-1]
+	nud = fields[len(fields)-1]
+	for i := 0; i+1 < len(fields); i++ {
+		if fields[i] == "lladdr" {
+			mac = fields[i+1]
+		}
+	}
+	return nud, mac
 }
 
 // isOnline 仅把已确认可达的 NUD 状态视为在线。
@@ -255,6 +267,43 @@ func neighborState(ip string) string {
 // STALE/DELAY/PROBE 属于"未确认"状态（可能设备已离开），一律视为离线。
 func isOnline(nud string) bool {
 	return nud == "REACHABLE" || nud == "PERMANENT"
+}
+
+// writeStateFile 把防抖后的最终状态原子写入 stateFile，供 LuCI 状态页读取
+func writeStateFile(cfg config.Config, devices map[string]deviceState) {
+	type entry struct {
+		Name   string `json:"name"`
+		IP     string `json:"ip"`
+		Mac    string `json:"mac"`
+		Online bool   `json:"online"`
+		NUD    string `json:"nud"`
+	}
+	payload := struct {
+		Timestamp string  `json:"timestamp"`
+		Targets   []entry `json:"targets"`
+	}{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Targets:   make([]entry, 0, len(cfg.Targets)),
+	}
+	for _, t := range cfg.Targets {
+		d := devices[toID(t.IP)]
+		payload.Targets = append(payload.Targets, entry{
+			Name:   t.Name,
+			IP:     t.IP,
+			Mac:    d.Mac,
+			Online: d.Online,
+			NUD:    d.Nud,
+		})
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(stateFile), 0o755)
+	tmp := stateFile + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err == nil {
+		_ = os.Rename(tmp, stateFile)
+	}
 }
 
 // ---------- 工具函数 ----------
@@ -494,7 +543,7 @@ func main() {
 
 		for _, t := range cfg.Targets {
 			id := toID(t.IP)
-			nud := neighborState(t.IP)
+			nud, mac := neighborInfo(t.IP)
 
 			// 防抖：连续 2 次探测无 ARP 应答才判定离线，避免偶发 ARP 延迟导致抖动
 			if isOnline(nud) {
@@ -511,6 +560,7 @@ func main() {
 			devices[id] = deviceState{
 				Name:      t.Name,
 				IP:        t.IP,
+				Mac:       mac,
 				Status:    state,
 				Nud:       nud,
 				Online:    state == "home",
@@ -528,6 +578,9 @@ func main() {
 				}
 			}
 		}
+
+		// 把防抖后的最终状态写到本地文件，供 LuCI 状态页只读使用
+		writeStateFile(cfg, devices)
 
 		if anyChanged || !hasPublishedAggregate {
 			pub(aggregateTopic, mustMarshal(aggregatePayload{
