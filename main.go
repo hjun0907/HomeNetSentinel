@@ -210,13 +210,31 @@ func readUbusStatus(iface string) *wanStatus {
 
 // ---------- 邻居表（ARP/NUD）在场检测 ----------
 
-// probeNeighbor 向目标发送一次 ping，强制内核发起 ARP 解析/重新校验 NUD。
-// 不关心 ping 是否收到 ICMP 应答：设备在线时其协议栈必然回复 ARP，NUD 变为 REACHABLE；
-// 设备离线时 ARP 无应答，条目转为 FAILED/INCOMPLETE 并被回收。
+// probeNeighbor 主动探测目标：先删除旧邻居条目，强制内核立刻发起广播 ARP 解析，
+// 再 ping 触发流量。在线设备会在 DTIM 周期内回应 ARP → NUD=REACHABLE；
+// 离线设备无 ARP 应答 → 约 3~4 秒后 NUD=FAILED/INCOMPLETE。
 func probeNeighbor(ip string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	_ = exec.CommandContext(ctx, "/sbin/ip", "neigh", "del", ip, "dev", neighborDev(ctx, ip)).Run()
 	_ = exec.CommandContext(ctx, "/bin/ping", "-c", "1", "-W", "1", ip).Run()
+	// 等待广播 ARP 探测完成（在线手机即使在省电模式也会由固件在 DTIM 内应答 ARP）
+	time.Sleep(2 * time.Second)
+}
+
+// neighborDev 解析目标所在的网络接口（如 br-lan），用于删除邻居条目
+func neighborDev(ctx context.Context, ip string) string {
+	out, err := exec.CommandContext(ctx, "/sbin/ip", "neigh", "show", ip).Output()
+	if err == nil {
+		fields := strings.Fields(string(out))
+		for i := 0; i+1 < len(fields); i++ {
+			if fields[i] == "dev" {
+				return fields[i+1]
+			}
+		}
+	}
+	return "br-lan"
 }
 
 func neighborState(ip string) string {
@@ -232,12 +250,11 @@ func neighborState(ip string) string {
 	return fields[len(fields)-1]
 }
 
+// isOnline 仅把已确认可达的 NUD 状态视为在线。
+// 主动探测（删条目+ping）后，在线设备必然经过 ARP 应答变为 REACHABLE；
+// STALE/DELAY/PROBE 属于"未确认"状态（可能设备已离开），一律视为离线。
 func isOnline(nud string) bool {
-	switch nud {
-	case "REACHABLE", "STALE", "DELAY", "PROBE", "PERMANENT":
-		return true
-	}
-	return false
+	return nud == "REACHABLE" || nud == "PERMANENT"
 }
 
 // ---------- 工具函数 ----------
@@ -439,6 +456,11 @@ func main() {
 	// 主循环状态
 	lastStates := map[string]string{}
 	lastProbe := map[string]time.Time{}
+	// misses：连续探测失败计数；初始为 2（设备首次探测成功前视为离线）
+	misses := map[string]int{}
+	for _, t := range cfg.Targets {
+		misses[toID(t.IP)] = 2
+	}
 	hasPublishedAggregate := false
 	lastRxGb, lastTxGb := int64(-1), int64(-1)
 	lastIpv4, lastIpv6Pd := "", ""
@@ -473,8 +495,16 @@ func main() {
 		for _, t := range cfg.Targets {
 			id := toID(t.IP)
 			nud := neighborState(t.IP)
-			state := "not_home"
+
+			// 防抖：连续 2 次探测无 ARP 应答才判定离线，避免偶发 ARP 延迟导致抖动
 			if isOnline(nud) {
+				misses[id] = 0
+			} else {
+				misses[id]++
+			}
+
+			state := "not_home"
+			if misses[id] < 2 {
 				state = "home"
 				onlineCount++
 			}
