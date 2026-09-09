@@ -94,7 +94,7 @@ jobs:
           VERSION="${VERSION#v}"
           if [[ ! "$VERSION" =~ ^[0-9] ]]; then
             # 手动从分支触发时 ref_name 是分支名，退化为合法的开发版本号
-            VERSION="0.0.0~git$(echo "$GITHUB_SHA" | cut -c1-7)"
+            VERSION="0.0.0"
           fi
           echo "Building IPK version: ${VERSION}-1"
           sh ./build_ipk.sh --bin ./package/luci-app-homenet-sentinel/prebuilt/HomeNet-Sentinel --arch ${{ matrix.ipk }} --version "${VERSION}-1" --output "$OUT_DIR"
@@ -153,7 +153,7 @@ jobs:
           else
             # 手动从分支触发时 ref_name 是分支名（如 master），不是合法包版本号，
             # APK 版本必须以数字开头，这里退化为 0.0.0~git<shortsha>
-            PKG_VERSION="0.0.0~git$(echo "$GITHUB_SHA" | cut -c1-7)"
+            PKG_VERSION="0.0.0"
             PKG_RELEASE=1
           fi
           echo "Resolved: PKG_VERSION=$PKG_VERSION PKG_RELEASE=$PKG_RELEASE"
