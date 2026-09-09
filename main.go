@@ -35,9 +35,11 @@ type targetDiscovery struct {
 	Name                   string   `json:"name"`
 	UniqueID               string   `json:"unique_id"`
 	StateTopic             string   `json:"state_topic"`
-	ValueTemplate          string   `json:"value_template"`
-	JSONAttributesTopic    string   `json:"json_attributes_topic"`
-	JSONAttributesTemplate string   `json:"json_attributes_template"`
+	PayloadOn              string   `json:"payload_on"`
+	PayloadOff             string   `json:"payload_off"`
+	DeviceClass            string   `json:"device_class"`
+	JSONAttributesTopic    string   `json:"json_attributes_topic,omitempty"`
+	JSONAttributesTemplate string   `json:"json_attributes_template,omitempty"`
 	AvailabilityTopic      string   `json:"availability_topic"`
 	PayloadAvailable       string   `json:"payload_available"`
 	PayloadNotAvailable    string   `json:"payload_not_available"`
@@ -230,6 +232,11 @@ func toID(s string) string {
 	return strings.ReplaceAll(s, ".", "_")
 }
 
+// deviceStateTopic 每个目标的在线/离线独立状态主题（retained，值 online/offline）
+func deviceStateTopic(id string) string {
+	return fmt.Sprintf("%s/device/%s/state", baseTopic, id)
+}
+
 func readUint64File(path string) (uint64, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -335,17 +342,19 @@ func main() {
 		}
 	}
 
-	// 发布每个在场目标的 HA 发现配置
+	// 发布每个在场目标的 HA 发现配置（在线/离线二进制传感器）
 	for _, t := range cfg.Targets {
 		id := toID(t.IP)
+		// 清理旧版实体类型（device_tracker / sensor）
 		pub(fmt.Sprintf("%s/device_tracker/%s/config", discoveryPrefix, id), "")
-		pub(fmt.Sprintf("%s/binary_sensor/%s/config", discoveryPrefix, id), "")
 		pub(fmt.Sprintf("%s/sensor/%s/config", discoveryPrefix, id), "")
 		disc := targetDiscovery{
 			Name:                   t.Name,
 			UniqueID:               "lan_presence_" + id,
-			StateTopic:             aggregateTopic,
-			ValueTemplate:          fmt.Sprintf("{{ value_json.devices['%s'].status if value_json.devices is defined and value_json.devices['%s'] is defined else 'unknown' }}", id, id),
+			StateTopic:             deviceStateTopic(id),
+			PayloadOn:              "online",
+			PayloadOff:             "offline",
+			DeviceClass:            "connectivity",
 			JSONAttributesTopic:    aggregateTopic,
 			JSONAttributesTemplate: fmt.Sprintf("{{ value_json.devices['%s'] | tojson if value_json.devices is defined and value_json.devices['%s'] is defined else '{}' }}", id, id),
 			AvailabilityTopic:      availabilityTopic,
@@ -354,7 +363,7 @@ func main() {
 			Icon:                   "mdi:cellphone",
 			Device:                 wanDevice(),
 		}
-		pub(fmt.Sprintf("%s/sensor/%s/config", discoveryPrefix, id), mustMarshal(disc))
+		pub(fmt.Sprintf("%s/binary_sensor/%s/config", discoveryPrefix, id), mustMarshal(disc))
 	}
 
 	ids := make([]string, 0, len(currentIDs))
@@ -452,6 +461,12 @@ func main() {
 				anyChanged = true
 				fmt.Printf("%s %s (%s) -> %s (NUD=%s)\n", now.Format("15:04:05"), t.Name, t.IP, state, nud)
 				lastStates[id] = state
+				// 发布该目标独立的在线/离线状态（retained）
+				if state == "home" {
+					pub(deviceStateTopic(id), "online")
+				} else {
+					pub(deviceStateTopic(id), "offline")
+				}
 			}
 		}
 

@@ -3,14 +3,40 @@
 XHR.poll(5, '<%=luci.dispatcher.build_url("admin", "services", "homenet-sentinel", "status")%>', null,
     function(_, data) {
         var el = document.getElementById('hns-service-status');
-        if (!el) {
-            return;
+        if (el && data) {
+            if (data.running) {
+                el.innerHTML = '<span style="color:#008800;font-weight:bold"><%:运行中%></span>';
+            } else {
+                el.innerHTML = '<span style="color:#cc0000;font-weight:bold"><%:未运行%></span>';
+            }
         }
 
-        if (data && data.running) {
-            el.innerHTML = '<span style="color:#008800;font-weight:bold"><%:运行中%></span>';
-        } else {
-            el.innerHTML = '<span style="color:#cc0000;font-weight:bold"><%:未运行%></span>';
+        var list = document.getElementById('hns-target-list');
+        if (list && data) {
+            var targets = data.targets || [];
+            if (targets.length === 0) {
+                list.innerHTML = '<em><%:未配置监控目标，可在下方“在家检测目标”中添加。%></em>';
+            } else {
+                var html = '<table class="cbi-section-table" style="width:100%">'
+                    + '<tr class="cbi-section-table-titles">'
+                    + '<th class="cbi-section-table-cell"><%:名称%></th>'
+                    + '<th class="cbi-section-table-cell"><%:IP 地址%></th>'
+                    + '<th class="cbi-section-table-cell"><%:状态%></th>'
+                    + '</tr>';
+                for (var i = 0; i < targets.length; i++) {
+                    var t = targets[i];
+                    var stateHtml = t.online
+                        ? '<span style="color:#008800;font-weight:bold">● <%:在线%></span>'
+                        : '<span style="color:#cc0000;font-weight:bold">○ <%:离线%></span>';
+                    html += '<tr class="cbi-section-table-row">'
+                        + '<td class="cbi-section-table-cell">' + t.name + '</td>'
+                        + '<td class="cbi-section-table-cell">' + t.ip + '</td>'
+                        + '<td class="cbi-section-table-cell">' + stateHtml + '</td>'
+                        + '</tr>';
+                }
+                html += '</table>';
+                list.innerHTML = html;
+            }
         }
     }
 );
@@ -20,4 +46,9 @@ XHR.poll(5, '<%=luci.dispatcher.build_url("admin", "services", "homenet-sentinel
 <fieldset class="cbi-section">
     <legend><%:运行状态%></legend>
     <p id="hns-service-status"><%:检测中...%></p>
+</fieldset>
+
+<fieldset class="cbi-section">
+    <legend><%:设备在线状态%></legend>
+    <div id="hns-target-list"><em><%:检测中...%></em></div>
 </fieldset>
