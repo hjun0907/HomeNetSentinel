@@ -92,6 +92,10 @@ jobs:
           fi
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
+          if [[ ! "$VERSION" =~ ^[0-9] ]]; then
+            # 手动从分支触发时 ref_name 是分支名，退化为合法的开发版本号
+            VERSION="0.0.0"
+          fi
           echo "Building IPK version: ${VERSION}-1"
           sh ./build_ipk.sh --bin ./package/luci-app-homenet-sentinel/prebuilt/HomeNet-Sentinel --arch ${{ matrix.ipk }} --version "${VERSION}-1" --output "$OUT_DIR"
 
@@ -115,11 +119,9 @@ jobs:
       matrix:
         include:
           - ipk: mipsel_24kc
-            sdk_target: ramips
-            sdk_subtarget: mt7621
+            sdk_arch: mips_24kc
           - ipk: aarch64_cortex-a53
-            sdk_target: armsr
-            sdk_subtarget: armv8
+            sdk_arch: aarch64_cortex-a53
 
     steps:
       - name: Checkout code
@@ -140,44 +142,113 @@ jobs:
         run: |
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
-          # 分离版本号和 release 号（如 1.0.5-1 -> 1.0.5 和 1）
-          PKG_VERSION="${VERSION%-*}"
-          PKG_RELEASE="${VERSION##*-}"
-          [ -z "$PKG_RELEASE" ] && PKG_RELEASE=1
+          if [[ "$VERSION" =~ ^[0-9] ]]; then
+            if [[ "$VERSION" == *-* ]]; then
+              PKG_VERSION="${VERSION%-*}"
+              PKG_RELEASE="${VERSION##*-}"
+            else
+              PKG_VERSION="$VERSION"
+              PKG_RELEASE=1
+            fi
+          else
+            # 手动从分支触发时 ref_name 是分支名（如 master），不是合法包版本号，
+            # APK 版本必须以数字开头，这里退化为 0.0.0~git<shortsha>
+            PKG_VERSION="0.0.0"
+            PKG_RELEASE=1
+          fi
+          echo "Resolved: PKG_VERSION=$PKG_VERSION PKG_RELEASE=$PKG_RELEASE"
           sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=$PKG_VERSION/" package/luci-app-homenet-sentinel/Makefile
           sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=$PKG_RELEASE/" package/luci-app-homenet-sentinel/Makefile
           echo "Updated Makefile:"
           head -6 package/luci-app-homenet-sentinel/Makefile
 
-      - name: Build APK package with OpenWrt SDK
-        uses: openwrt/gh-action-sdk@main
-        env:
-          ARCH: ${{ matrix.ipk }}-25.12.1
-          FEED_DIR: package/luci-app-homenet-sentinel
-          FEEDNAME: homenet
-          NO_DEFAULT_FEEDS: 1
-          IGNORE_ERRORS: 1
-
-      - name: Find and collect APK files
+      - name: Build APK with OpenWrt SDK Docker
         run: |
           mkdir -p apk
-          find . -name "*.apk" -exec cp {} apk/ \; || true
-          echo "=== APK files found ==="
-          ls -la apk/ || true
+          # OpenWrt snapshot / 25.x 使用 APK 包格式，通过官方 SDK 容器编译。
+          # 注意 1：新版 SDK 镜像的 /builder 内只有 setup.sh，首次运行必须先执行它下载并解压 SDK；
+          # 注意 2：/builder/bin 挂载到宿主机，否则容器 --rm 退出后产物会丢失；
+          # 注意 3：src-link 必须指向“包含包目录的目录”（package/），不能直接指向包目录本身。
+          docker run --rm \
+            --user root \
+            -v "$PWD:/workspace" \
+            -v "$PWD/apk:/builder/bin" \
+            ghcr.io/openwrt/sdk:${{ matrix.sdk_arch }} \
+            bash -c '
+              set -e
+              cd /builder
+
+              echo "=== Bootstrapping SDK (first run downloads the SDK) ==="
+              if [ ! -d scripts ]; then
+                ./setup.sh
+              fi
+
+              echo "=== Registering custom feed ==="
+              [ -f feeds.conf ] || cp feeds.conf.default feeds.conf
+              # 官方示例同样将 feed 源替换为 GitHub 镜像，避免 git.openwrt.org 不稳定
+              sed -i -E "s;git.openwrt.org/(feed|project|openwrt);github.com/openwrt;" feeds.conf
+              echo "src-link homenet /workspace/package" >> feeds.conf
+              cat feeds.conf
+
+              echo "=== Updating feeds ==="
+              ./scripts/feeds update -a
+
+              echo "=== Installing feed packages ==="
+              ./scripts/feeds install -a
+
+              echo "=== Generating default config ==="
+              make defconfig
+
+              echo "=== Building package ==="
+              make package/luci-app-homenet-sentinel/clean V=s
+              make package/luci-app-homenet-sentinel/compile -j"$(nproc)" V=s
+
+              echo "=== Generated APK files ==="
+              find bin -name "*.apk" -type f
+
+              echo "=== Verifying APK contents (apk extract) ==="
+              # v3 .apk 是 ADB 容器不是 tar，必须用 apk extract 解包验证二进制确实打入包内
+              APK_FILE="$(find bin -name 'luci-app-homenet-sentinel*.apk' -type f | head -1)"
+              APK_TOOL="$(command -v apk || true)"
+              [ -x "$APK_TOOL" ] || APK_TOOL="/builder/staging_dir/host/bin/apk"
+              rm -rf /tmp/verify && mkdir -p /tmp/verify
+              "$APK_TOOL" --allow-untrusted extract --destination /tmp/verify "$APK_FILE"
+              ls -la /tmp/verify/usr/bin/ || true
+              [ -x /tmp/verify/usr/bin/HomeNet-Sentinel ] || {
+                echo "FATAL: usr/bin/HomeNet-Sentinel missing from APK"
+                exit 1
+              }
+              file /tmp/verify/usr/bin/HomeNet-Sentinel
+            '
+
+      - name: Collect APK files
+        run: |
+          # bin/packages 下还有编译依赖时生成的 lua/libuci/luci-base 等 apk，
+          # 只收集我们自己的包，避免把依赖包也传到 Release；
+          # 限定在 apk/packages 子树查找，避免 find 重复收集拍平后的副本
+          echo "=== Our APK files ==="
+          find apk/packages -name "luci-app-homenet-sentinel*.apk" -type f -print
+
+          find apk/packages -name "luci-app-homenet-sentinel*.apk" -type f | while IFS= read -r f; do
+            cp "$f" "apk/$(basename "$f" .apk)_${{ matrix.sdk_arch }}.apk"
+          done
+
+          echo "=== Final APK artifacts ==="
+          ls -la apk/luci-app-homenet-sentinel*.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: apk-${{ matrix.ipk }}
           path: apk/*.apk
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 7
 
   # 创建 GitHub Release
   release:
     runs-on: ubuntu-latest
     needs: [build-ipk, build-apk]
-    if: always() && (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch')
+    if: always() && needs.build-ipk.result == 'success' && needs.build-apk.result == 'success' && (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch')
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4

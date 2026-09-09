@@ -13,7 +13,7 @@ define Package/luci-app-homenet-sentinel
   CATEGORY:=LuCI
   SUBMENU:=3. Applications
   TITLE:=LuCI support for HomeNet Sentinel
-  DEPENDS:=+libpthread +luci-base
+  DEPENDS:=+luci-base
 endef
 
 define Package/luci-app-homenet-sentinel/description
@@ -49,6 +49,9 @@ define Package/luci-app-homenet-sentinel/install
 
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/model/cbi
 	$(INSTALL_DATA) ./files/usr/lib/lua/luci/model/cbi/homenet_sentinel.lua $(1)/usr/lib/lua/luci/model/cbi/homenet_sentinel.lua
+
+	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/view/homenet_sentinel
+	$(INSTALL_DATA) ./files/usr/lib/lua/luci/view/homenet_sentinel/status.htm $(1)/usr/lib/lua/luci/view/homenet_sentinel/status.htm
 endef
 
 define Package/luci-app-homenet-sentinel/postinst
