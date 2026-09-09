@@ -1,19 +1,30 @@
 package config
 
 import (
+	"net"
 	"os"
-	"strings"
 	"strconv"
+	"strings"
 )
 
+// Target 是一个被监控的在场检测目标（手机等设备）
+type Target struct {
+	Name string
+	IP   string
+}
+
 type Config struct {
-	MQTTBroker   string
-	MQTTClientID  string
-	MQTTTopic     string
-	DeviceName    string
-	Interval      int
-	Username      string
-	Password      string
+	BrokerHost string
+	BrokerPort int
+	Username   string
+	Password   string
+	ClientID   string
+
+	Targets                []Target
+	WanInterface           string
+	WanStatusInterface     string
+	WanIpv6StatusInterface string
+	WanRateRefreshSeconds  int
 }
 
 func Load() Config {
@@ -28,27 +39,50 @@ func Load() Config {
 		return def
 	}
 
-	// 从 HNS_ 环境变量构建 broker URL
-	brokerHost := getHNS("BROKER_HOST", "127.0.0.1")
-	brokerPort := getHNS("BROKER_PORT", "1883")
-	broker := "tcp://" + brokerHost + ":" + brokerPort
+	port, err := strconv.Atoi(strings.TrimSpace(getHNS("BROKER_PORT", "1883")))
+	if err != nil || port <= 0 || port > 65535 {
+		port = 1883
+	}
 
-	// 获取间隔时间
-	intervalStr := getHNS("WAN_RATE_REFRESH_INTERVAL_SECONDS", "30")
-	interval, err := strconv.Atoi(intervalStr)
-	if err != nil || interval <= 0 {
-		interval = 30
+	rate, err := strconv.Atoi(strings.TrimSpace(getHNS("WAN_RATE_REFRESH_INTERVAL_SECONDS", "3")))
+	if err != nil || rate <= 0 {
+		rate = 3
 	}
 
 	return Config{
-		MQTTBroker:   broker,
-		MQTTClientID: getHNS("MQTT_CLIENTID", "homenetsentinel-"+strings.ReplaceAll(uuidString(), "-", "")),
-		MQTTTopic:    getHNS("MQTT_TOPIC", "home/sentinel/device"),
-		DeviceName:   getHNS("DEVICE_NAME", "HomeNetSentinel"),
-		Username:     getHNS("MQTT_USERNAME", ""),
-		Password:     getHNS("MQTT_PASSWORD", ""),
-		Interval:     interval,
+		BrokerHost:             strings.TrimSpace(getHNS("BROKER_HOST", "")),
+		BrokerPort:             port,
+		Username:               getHNS("MQTT_USERNAME", ""),
+		Password:               getHNS("MQTT_PASSWORD", ""),
+		ClientID:               "lan_presence_" + strings.ReplaceAll(uuidString(), "-", ""),
+		Targets:                parseTargets(os.Getenv("HNS_TARGETS")),
+		WanInterface:           getHNS("WAN_INTERFACE", "pppoe-wan"),
+		WanStatusInterface:     getHNS("WAN_STATUS_INTERFACE", "wan"),
+		WanIpv6StatusInterface: getHNS("WAN_IPV6_STATUS_INTERFACE", "wan_6"),
+		WanRateRefreshSeconds:  rate,
 	}
+}
+
+// parseTargets 解析 "名称|IP;名称|IP" 格式的目标列表
+func parseTargets(raw string) []Target {
+	var result []Target
+	for _, pair := range strings.Split(raw, ";") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		fields := strings.SplitN(pair, "|", 2)
+		if len(fields) != 2 {
+			continue
+		}
+		name := strings.TrimSpace(fields[0])
+		ip := strings.TrimSpace(fields[1])
+		if name == "" || ip == "" || net.ParseIP(ip) == nil {
+			continue
+		}
+		result = append(result, Target{Name: name, IP: ip})
+	}
+	return result
 }
 
 func uuidString() string {
