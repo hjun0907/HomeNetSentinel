@@ -43,9 +43,20 @@ jobs:
           go mod tidy
           go mod verify
           go mod download
-          ${{ matrix.env }} go build -ldflags="-s -w -X main.Version=${{ github.ref_name }}" -o HomeNet-Sentinel .
+          # 版本号解析：tag vX.Y.Z -> X.Y.Z；分支/手动触发 -> 0.0.0-dev+<短sha>
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          if [[ "$VERSION" =~ ^[0-9] ]]; then
+            APP_VERSION="$VERSION"
+          else
+            APP_VERSION="0.0.0-dev+$(echo "$GITHUB_SHA" | cut -c1-7)"
+          fi
+          echo "Binary version: $APP_VERSION"
+          ${{ matrix.env }} go build -ldflags="-s -w -X main.Version=$APP_VERSION" -o HomeNet-Sentinel .
           chmod +x HomeNet-Sentinel
           file HomeNet-Sentinel
+          # 确认版本号已注入二进制（跨架构无法直接执行，用 strings 校验）
+          strings HomeNet-Sentinel | grep -E "^(0|[1-9][0-9]*)\.[0-9]+\.[0-9]+" | head -1
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4

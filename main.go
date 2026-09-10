@@ -30,6 +30,9 @@ const (
 	probeInterval = 8 * time.Second
 )
 
+// Version 编译时通过 -ldflags "-X main.Version=..." 注入（CI 传入包版本号）
+var Version = "dev"
+
 // stateFileLogged 状态文件首次成功写出后只打一次日志
 var stateFileLogged bool
 
@@ -286,9 +289,11 @@ func writeStateFile(cfg config.Config, devices map[string]deviceState) {
 		NUD    string `json:"nud"`
 	}
 	payload := struct {
+		Version   string  `json:"version"`
 		Timestamp string  `json:"timestamp"`
 		Targets   []entry `json:"targets"`
 	}{
+		Version:   Version,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Targets:   make([]entry, 0, len(cfg.Targets)),
 	}
@@ -395,7 +400,15 @@ func wanDevice() haDevice {
 // ---------- 主流程 ----------
 
 func main() {
-	fmt.Println("🚀 HomeNetSentinel 启动成功")
+	// --version：输出版本号后退出（供 LuCI 关于页/打包校验读取编译时注入的版本）
+	for _, a := range os.Args[1:] {
+		if a == "--version" || a == "-version" || a == "-v" {
+			fmt.Println(Version)
+			return
+		}
+	}
+
+	fmt.Printf("🚀 HomeNetSentinel v%s 启动成功\n", Version)
 	cfg := config.Load()
 	if cfg.BrokerHost == "" {
 		fmt.Println("❌ broker_host is empty")

@@ -1,7 +1,24 @@
 <%
+-- 关于页信息常量（需要修改联系方式时改这里即可）
+local PROJECT_URL  = "https://github.com/hjun0907/HomeNetSentinel"
+local EMAIL        = ""   -- 联系邮箱，例如 "someone@example.com"
+local ORIGINAL_URL = ""   -- 原项目地址，例如 "https://github.com/xxx/yyy"
+
 local sys = require "luci.sys"
-local ver = sys.exec("opkg info luci-app-homenet-sentinel 2>/dev/null | sed -n 's/^Version: //p'")
-ver = (ver and ver ~= "") and ver:gsub("%s+$", "") or "—"
+
+-- 版本号：优先读二进制编译时注入的版本（HomeNet-Sentinel --version）
+local ver = sys.exec("/usr/bin/HomeNet-Sentinel --version 2>/dev/null")
+ver = ver and ver:gsub("%s+$", "") or ""
+if ver == "" then
+    -- 回退：包管理器记录的版本
+    ver = sys.exec("apk info -e luci-app-homenet-sentinel >/dev/null 2>&1 && apk version luci-app-homenet-sentinel 2>/dev/null | awk '{print $1}' | sed 's/luci-app-homenet-sentinel-//'")
+    ver = ver and ver:gsub("%s+$", "") or ""
+end
+if ver == "" then
+    ver = sys.exec("opkg info luci-app-homenet-sentinel 2>/dev/null | sed -n 's/^Version: //p'")
+    ver = ver and ver:gsub("%s+$", "") or ""
+end
+if ver == "" then ver = "—" end
 %>
 <style>
 .hns-about { padding: 6px 2px; max-width: 720px; }
@@ -12,8 +29,9 @@ ver = (ver and ver ~= "") and ver:gsub("%s+$", "") or "—"
     background: rgba(255,255,255,0.06); padding: 1px 6px; border-radius: 4px;
     font-family: monospace; font-size: 13px; color: #93c5fd;
 }
-.hns-about a { color: #60a5fa; }
+.hns-about a { color: #60a5fa; word-break: break-all; }
 .hns-about .hns-ver { color: #2dd4bf; font-weight: bold; }
+.hns-about .hns-contact { margin-top: 4px; }
 </style>
 
 <div id="hns-about-wrap" class="hns-about">
@@ -35,6 +53,12 @@ ver = (ver and ver ~= "") and ver:gsub("%s+$", "") or "—"
     <p><%:在“基础设置”标签中填写 MQTT 服务器信息并启用服务；在“在家检测目标”中添加要监控的设备名称与 IP 地址。%></p>
     <p><%:设备在线状态通过路由器邻居表（<code>ip neigh</code>）判定，无线信号强度来自 iwinfo（仅关联到本路由器无线的设备可显示）。%></p>
 
-    <h3><%:项目主页%></h3>
-    <p><a href="https://github.com/hjun0907/HomeNetSentinel" target="_blank" rel="noopener">github.com/hjun0907/HomeNetSentinel</a></p>
+    <h3><%:项目与联系%></h3>
+    <p class="hns-contact"><%:项目地址：%><a href="<%=PROJECT_URL%>" target="_blank" rel="noopener"><%=PROJECT_URL%></a></p>
+    <% if ORIGINAL_URL ~= "" then %>
+    <p class="hns-contact"><%:原项目地址：%><a href="<%=ORIGINAL_URL%>" target="_blank" rel="noopener"><%=ORIGINAL_URL%></a></p>
+    <% end %>
+    <% if EMAIL ~= "" then %>
+    <p class="hns-contact"><%:联系邮箱：%><a href="mailto:<%=EMAIL%>"><%=EMAIL%></a></p>
+    <% end %>
 </div>
