@@ -182,8 +182,68 @@ logread | grep homenet-sentinel
 
 也可以在 OpenWrt 后台日志页面查看：`状态 -> 系统日志`（`/cgi-bin/luci/admin/status/log`）。
 
----
+### 4) openwrt 25.12.4定制apk文件
+rm -rf /tmp/ex && mkdir /tmp/ex
+apk --allow-untrusted extract --destination /tmp/ex /tmp/luci.apk
+cp -f /tmp/ex/usr/bin/HomeNet-Sentinel /usr/bin/HomeNet-Sentinel
+chmod 755 /usr/bin/HomeNet-Sentinel
 
+# 验证新二进制包含 HNS_BROKER
+strings /usr/bin/HomeNet-Sentinel | grep -i HNS_BROKER
+
+# 重启服务
+/etc/init.d/homenet-sentinel restart
+sleep 2
+logread | tail -5 | grep -i homenet
+
+### 5) fanchmwrt 覆盖安装完整步骤（解决 about.htm 缺失 / LuCI 500）
+
+fanchmwrt 因包源与官方 snapshot 冲突无法用 `apk add` 正常安装，须用 `apk extract` 解包后手动覆盖。
+注意：必须拷贝 view 目录下**所有** `.htm`（包含 `about.htm`），否则 LuCI 渲染 `cbi/map` 时找不到模板会 500。
+`model/cbi` 下的 `.lua` 也要一并覆盖，否则 CBI 配置页无法加载。
+
+```sh
+# 1. 解包 apk（假设已将 luci.apk 放到 /tmp/）
+rm -rf /tmp/ex && mkdir /tmp/ex
+apk --allow-untrusted extract --destination /tmp/ex /tmp/luci.apk
+
+# 2. 覆盖二进制
+cp -f /tmp/ex/usr/bin/HomeNet-Sentinel /usr/bin/HomeNet-Sentinel
+chmod 755 /usr/bin/HomeNet-Sentinel
+
+# 3. 覆盖 LuCI 控制器、CBI 模型、视图模板（*.htm 通配符，含 about.htm 与 status.htm）
+cp -f /tmp/ex/usr/lib/lua/luci/controller/homenet_sentinel.lua /usr/lib/lua/luci/controller/
+cp -f /tmp/ex/usr/lib/lua/luci/model/cbi/homenet_sentinel.lua /usr/lib/lua/luci/model/cbi/
+mkdir -p /usr/lib/lua/luci/view/homenet_sentinel
+cp -f /tmp/ex/usr/lib/lua/luci/view/homenet_sentinel/*.htm /usr/lib/lua/luci/view/homenet_sentinel/
+
+# 4. 验证 about.htm 已就位
+ls -la /usr/lib/lua/luci/view/homenet_sentinel/
+
+# 5. 重启服务并清 LuCI 模板缓存
+/etc/init.d/homenet-sentinel restart
+rm -rf /tmp/luci-indexcache* /tmp/luci-modulecache
+```
+
+强制刷新浏览器（Ctrl+Shift+R）后即可看到三个 Tab 与"关于"页面。
+
+---
+## 记录
+2026-09-09 
+这次排查跨越了三层问题：
+
+CI 打包失败 → APK 版本号不能是 master、~ 非法，改为 0.0.0；SDK 容器需 setup.sh 引导、feed 指向包父目录、产物挂载 /builder/bin；
+Release 多出一堆 apk → 收集步骤过滤，只取 luci-app-homenet-sentinel*.apk，并加了 apk 解包自检；
+路由器装不上/连不上 MQTT → ① snapshot 内核漂移 + fanchmwrt 坏 world 导致 apk 求解失败，用 apk extract 绕过；② 根因是本地 4 个 commit（含 getHNS 环境变量修复）没推送到 GitHub，CI 一直用旧代码编译，旧二进制读不到 HNS_BROKER_HOST 兜底到 127.0.0.1。
+覆盖安装并清 LuCI 缓存即可看到新界面：
+rm -rf /tmp/ex && mkdir /tmp/ex
+apk --allow-untrusted extract --destination /tmp/ex /tmp/luci.apk
+cp -f /tmp/ex/usr/bin/HomeNet-Sentinel /usr/bin/
+cp -f /tmp/ex/usr/lib/lua/luci/controller/homenet_sentinel.lua /usr/lib/lua/luci/controller/
+cp -f /tmp/ex/usr/lib/lua/luci/view/homenet_sentinel/status.htm /usr/lib/lua/luci/view/homenet_sentinel/
+chmod 755 /usr/bin/HomeNet-Sentinel
+/etc/init.d/homenet-sentinel restart
+rm -rf /tmp/luci-indexcache* /tmp/luci-modulecache
 ## 许可
 
 本项目采用 `MIT` 许可证，详见 `LICENSE`。

@@ -192,53 +192,69 @@ col.hns-col-statew { width: 100px; }
         }
     );
 
-    // ---- 标签页：把 CBI 渲染出的区块分桶到 设备列表 / 基础设置 / 关于 ----
+    // ---- 标签页：用最低公共祖先(LCA)定位 CBI section 容器，不依赖 .cbi-section 类名 ----
+    // ucode LuCI 与传统 LuCI 的 DOM 结构不同，findSection 依赖 class/fieldset 会失败
     var TAB_DEFS = [
         { id: 'list',     label: '<%:设备列表%>' },
         { id: 'settings', label: '<%:基础设置%>' },
         { id: 'about',    label: '<%:关于%>' }
     ];
 
-    function findSection(el) {
-        if (!el) return null;
-        if (el.closest) {
-            var s = el.closest('.cbi-section') || el.closest('fieldset');
-            if (s) return s;
+    // findLCA: 找两个元素的最低公共祖先节点
+    function findLCA(a, b) {
+        var ancestors = [];
+        var node = a;
+        while (node) {
+            ancestors.push(node);
+            node = node.parentNode;
         }
-        // 回退：向上两层
-        return el.parentElement && el.parentElement.parentElement;
+        node = b;
+        while (node) {
+            if (ancestors.indexOf(node) >= 0) return node;
+            node = node.parentNode;
+        }
+        return null;
     }
 
     function setupTabs() {
+        if (document.querySelector('.hns-tabs')) return true; // 已初始化，防重复
+
         var banner = document.getElementById('hns-banner');
         var about = document.getElementById('hns-about-wrap');
         if (!banner) { console.warn('[HNS] banner not found'); return false; }
-        if (!about) { console.warn('[HNS] about section not found (about.htm missing?)'); return false; }
+        if (!about) { console.warn('[HNS] about not found (about.htm missing?)'); return false; }
 
-        var listSec = findSection(banner);
-        var aboutSec = findSection(about);
-        if (!listSec || !aboutSec || listSec === aboutSec) { console.warn('[HNS] section detection failed'); return false; }
+        // 用 LCA 定位包含所有 CBI section 的容器
+        var lca = findLCA(banner, about);
+        if (!lca || lca === document.body || lca === document.documentElement) {
+            console.warn('[HNS] LCA not found or too high');
+            return false;
+        }
 
-        var container = listSec.parentNode;
-        var sections = container.querySelectorAll('.cbi-section, fieldset');
-        if (sections.length < 2) sections = container.children;
+        // LCA 的直接子元素就是各 section，按是否包含 banner/about 分桶
         var panes = { list: [], settings: [], about: [] };
-
-        for (var i = 0; i < sections.length; i++) {
-            var sec = sections[i];
-            if (sec.contains(banner)) {
-                panes.list.push(sec);
-            } else if (sec.contains(about)) {
-                panes.about.push(sec);
+        for (var i = 0; i < lca.children.length; i++) {
+            var child = lca.children[i];
+            // 跳过自己插入的 tab bar
+            if (child.classList && child.classList.contains('hns-tabs')) continue;
+            if (child.contains(banner)) {
+                panes.list.push(child);
+            } else if (child.contains(about)) {
+                panes.about.push(child);
             } else {
-                panes.settings.push(sec);
+                panes.settings.push(child);
             }
         }
 
-        // 保存/应用 按钮只在"基础设置"标签显示
-        var actions = container.querySelectorAll('.cbi-page-actions');
+        if (!panes.list.length || !panes.about.length) {
+            console.warn('[HNS] section classification failed', panes);
+            return false;
+        }
 
-        // 构建标签栏
+        // 保存/应用 按钮（可能在 LCA 内或外，全局查找）
+        var actions = document.querySelectorAll('.cbi-page-actions');
+
+        // 构建标签栏并插入到 LCA 第一个子元素之前
         var bar = document.createElement('div');
         bar.className = 'hns-tabs';
         for (var t = 0; t < TAB_DEFS.length; t++) {
@@ -252,7 +268,7 @@ col.hns-col-statew { width: 100px; }
                 bar.appendChild(btn);
             })(TAB_DEFS[t]);
         }
-        container.insertBefore(bar, listSec);
+        lca.insertBefore(bar, lca.firstChild);
 
         function showTab(id) {
             var btns = bar.querySelectorAll('.hns-tab-btn');
