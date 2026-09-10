@@ -102,4 +102,8 @@ local target_ip = t:option(Value, "ip", translate("IP 地址"))
 target_ip.datatype = "ipaddr"
 target_ip.rmempty = false
 
+-- “关于”标签页内容（独立面板，不参与 UCI 保存）
+local about = m:section(SimpleSection)
+about.template = "homenet_sentinel/about"
+
 return m

@@ -54,19 +54,36 @@ end)
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .hns-ip { color: #60a5fa; font-weight: 600; }
+.hns-mac { color: #9ca3af; font-family: monospace; font-size: 13px; }
 .hns-state { font-weight: bold; white-space: nowrap; }
 .hns-col-sig, .hns-col-state { text-align: center; }
 col.hns-col-dev { width: auto; }
+col.hns-col-macw { width: 165px; }
 col.hns-col-ip { width: 150px; }
 col.hns-col-sigw { width: 110px; }
 col.hns-col-statew { width: 100px; }
 @media (max-width: 640px) {
     .hns-table th, .hns-table td { padding: 10px 8px; font-size: 12px; }
+    col.hns-col-macw { width: 118px; }
     col.hns-col-ip { width: 110px; }
     col.hns-col-sigw { width: 84px; }
     col.hns-col-statew { width: 72px; }
     .hns-avatar { width: 34px; height: 34px; font-size: 15px; }
 }
+/* 顶部标签页 */
+.hns-tabs {
+    display: flex; gap: 4px; margin: 0 0 16px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+.hns-tab-btn {
+    appearance: none; background: none; border: none; cursor: pointer;
+    padding: 10px 18px; font-size: 14px; font-weight: 600; color: #9ca3af;
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.hns-tab-btn:hover { color: #e5e7eb; }
+.hns-tab-btn.active { color: #2dd4bf; border-bottom-color: #2dd4bf; }
+.hns-tab-pane { display: none; }
+.hns-tab-pane.active { display: block; }
 .hns-online { color: #22c55e; }
 .hns-active { color: #2dd4bf; }
 .hns-offline { color: #6b7280; }
@@ -85,6 +102,7 @@ col.hns-col-statew { width: 100px; }
     <table class="hns-table">
         <colgroup>
             <col class="hns-col-dev" />
+            <col class="hns-col-macw" />
             <col class="hns-col-ip" />
             <col class="hns-col-sigw" />
             <col class="hns-col-statew" />
@@ -92,13 +110,14 @@ col.hns-col-statew { width: 100px; }
         <thead>
             <tr>
                 <th><%:终端信息%></th>
+                <th><%:MAC 地址%></th>
                 <th><%:IP 地址%></th>
                 <th class="hns-col-sig"><%:信号强度%></th>
                 <th class="hns-col-state"><%:在线状态%></th>
             </tr>
         </thead>
         <tbody id="hns-rows">
-            <tr><td colspan="4" class="hns-empty"><%:检测中...%></td></tr>
+            <tr><td colspan="5" class="hns-empty"><%:检测中...%></td></tr>
         </tbody>
     </table>
 </div>
@@ -125,7 +144,7 @@ col.hns-col-statew { width: 100px; }
         if (!tb) return;
 
         if (!targets || targets.length === 0) {
-            tb.innerHTML = '<tr><td colspan="4" class="hns-empty"><%:未配置监控目标，可在下方"在家检测目标"中添加设备%></td></tr>';
+            tb.innerHTML = '<tr><td colspan="5" class="hns-empty"><%:未配置监控目标，可在"基础设置"中添加设备%></td></tr>';
             return;
         }
 
@@ -145,9 +164,9 @@ col.hns-col-statew { width: 100px; }
             html += '<tr>'
                 + '<td><div class="hns-dev">'
                 +   '<div class="hns-avatar" style="background:' + color + '">' + esc(initial) + '</div>'
-                +   '<div class="hns-dev-info"><div class="hns-dev-name">' + esc(t.name) + '</div>'
-                +     '<div class="hns-dev-mac">' + (t.mac ? esc(t.mac) : '—') + '</div></div>'
+                +   '<div class="hns-dev-info"><div class="hns-dev-name">' + esc(t.name) + '</div></div>'
                 + '</div></td>'
+                + '<td><span class="hns-mac">' + (t.mac ? esc(t.mac) : '—') + '</span></td>'
                 + '<td><span class="hns-ip">' + esc(t.ip) + '</span></td>'
                 + '<td class="hns-col-sig">' + sigHtml(t.signal) + '</td>'
                 + '<td class="hns-col-state">' + stateHtml + '</td>'
@@ -167,11 +186,89 @@ col.hns-col-statew { width: 100px; }
                 failCount++;
                 if (failCount === 3) {
                     var tb = document.getElementById('hns-rows');
-                    if (tb) tb.innerHTML = '<tr><td colspan="4" class="hns-empty"><%:状态获取失败，请刷新页面重试%></td></tr>';
+                    if (tb) tb.innerHTML = '<tr><td colspan="5" class="hns-empty"><%:状态获取失败，请刷新页面重试%></td></tr>';
                 }
             }
         }
     );
+
+    // ---- 标签页：把 CBI 渲染出的区块分桶到 设备列表 / 基础设置 / 关于 ----
+    var TAB_DEFS = [
+        { id: 'list',     label: '<%:设备列表%>' },
+        { id: 'settings', label: '<%:基础设置%>' },
+        { id: 'about',    label: '<%:关于%>' }
+    ];
+
+    function setupTabs() {
+        var banner = document.getElementById('hns-banner');
+        var about = document.getElementById('hns-about-wrap');
+        if (!banner || !about) return false;
+
+        var listSec = banner.closest('.cbi-section');
+        var aboutSec = about.closest('.cbi-section');
+        if (!listSec || !aboutSec) return false;
+
+        var container = listSec.parentNode;
+        var sections = container.querySelectorAll('.cbi-section');
+        var panes = { list: [], settings: [], about: [] };
+
+        for (var i = 0; i < sections.length; i++) {
+            var sec = sections[i];
+            if (sec.contains(banner)) {
+                panes.list.push(sec);
+            } else if (sec.contains(about)) {
+                panes.about.push(sec);
+            } else {
+                panes.settings.push(sec);
+            }
+        }
+
+        // 保存/应用 按钮只在"基础设置"标签显示
+        var actions = container.querySelectorAll('.cbi-page-actions');
+
+        // 构建标签栏
+        var bar = document.createElement('div');
+        bar.className = 'hns-tabs';
+        for (var t = 0; t < TAB_DEFS.length; t++) {
+            (function(def) {
+                var btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'hns-tab-btn' + (def.id === 'list' ? ' active' : '');
+                btn.textContent = def.label;
+                btn.setAttribute('data-tab', def.id);
+                btn.addEventListener('click', function() { showTab(def.id); });
+                bar.appendChild(btn);
+            })(TAB_DEFS[t]);
+        }
+        container.insertBefore(bar, listSec);
+
+        function showTab(id) {
+            var btns = bar.querySelectorAll('.hns-tab-btn');
+            for (var b = 0; b < btns.length; b++) {
+                btns[b].classList.toggle('active', btns[b].getAttribute('data-tab') === id);
+            }
+            for (var key in panes) {
+                for (var j = 0; j < panes[key].length; j++) {
+                    panes[key][j].style.display = (key === id) ? '' : 'none';
+                }
+            }
+            for (var a = 0; a < actions.length; a++) {
+                actions[a].style.display = (id === 'settings') ? '' : 'none';
+            }
+        }
+
+        window.__hnsShowTab = showTab;
+        showTab('list');
+        return true;
+    }
+
+    // CBI 区块在同一模板内已渲染好，直接尝试；失败则轮询等待
+    if (!setupTabs()) {
+        var tries = 0;
+        var timer = setInterval(function() {
+            if (setupTabs() || ++tries > 20) clearInterval(timer);
+        }, 200);
+    }
 })();
 //]]>
 </script>

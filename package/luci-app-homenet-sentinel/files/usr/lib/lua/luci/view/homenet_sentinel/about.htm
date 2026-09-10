@@ -1,0 +1,40 @@
+<%
+local sys = require "luci.sys"
+local ver = sys.exec("opkg info luci-app-homenet-sentinel 2>/dev/null | sed -n 's/^Version: //p'")
+ver = (ver and ver ~= "") and ver:gsub("%s+$", "") or "—"
+%>
+<style>
+.hns-about { padding: 6px 2px; max-width: 720px; }
+.hns-about h3 { color: #f3f4f6; font-size: 15px; margin: 18px 0 8px; }
+.hns-about p, .hns-about li { color: #c7cbd1; font-size: 14px; line-height: 1.9; }
+.hns-about ul { margin: 6px 0 0 0; padding-left: 20px; }
+.hns-about code {
+    background: rgba(255,255,255,0.06); padding: 1px 6px; border-radius: 4px;
+    font-family: monospace; font-size: 13px; color: #93c5fd;
+}
+.hns-about a { color: #60a5fa; }
+.hns-about .hns-ver { color: #2dd4bf; font-weight: bold; }
+</style>
+
+<div id="hns-about-wrap" class="hns-about">
+    <h3><%:HomeNet Sentinel（家庭网络哨兵）%></h3>
+    <p><%:在 OpenWrt 路由器上运行的家庭网络监控服务：通过 ARP/NUD 主动探测判断家庭成员设备的在家/离家状态，并监控广域网链路速率、流量、连接数与 IPv4/IPv6 地址，数据经 MQTT 上报，并自动注册为 Home Assistant 实体。%></p>
+
+    <h3><%:版本信息%></h3>
+    <p><%:软件版本：%><span class="hns-ver"><%=ver%></span></p>
+
+    <h3><%:主要功能%></h3>
+    <ul>
+        <li><%:在家检测：%><%:主动 ARP 探测 + 防抖判定，设备在线/离家约 15 秒内更新。%></li>
+        <li><%:HA 自动发现：%><%:每个目标注册为 binary_sensor 在线状态传感器，WAN 指标注册为传感器。%></li>
+        <li><%:WAN 监控：%><%:上/下行速率、累计流量、连接数、IPv4 地址、IPv6-PD 前缀。%></li>
+        <li><%:在线状态页：%><%:实时显示设备名称、MAC、IP、无线信号强度与在线状态。%></li>
+    </ul>
+
+    <h3><%:配置说明%></h3>
+    <p><%:在“基础设置”标签中填写 MQTT 服务器信息并启用服务；在“在家检测目标”中添加要监控的设备名称与 IP 地址。%></p>
+    <p><%:设备在线状态通过路由器邻居表（<code>ip neigh</code>）判定，无线信号强度来自 iwinfo（仅关联到本路由器无线的设备可显示）。%></p>
+
+    <h3><%:项目主页%></h3>
+    <p><a href="https://github.com/hjun0907/HomeNetSentinel" target="_blank" rel="noopener">github.com/hjun0907/HomeNetSentinel</a></p>
+</div>
