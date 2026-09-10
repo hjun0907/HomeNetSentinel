@@ -105,6 +105,15 @@ function action_status()
                 online = st.online
                 mac = st.mac
                 nud = st.nud or "UNKNOWN"
+                -- MAC 兜底：只读邻居表补 lladdr（不做任何探测/删除操作）
+                if not mac or mac == "" then
+                    local nout = util.trim(util.exec("ip neigh show " .. ip .. " 2>/dev/null") or "")
+                    if nout ~= "" then
+                        for w in nout:gmatch("%S+") do
+                            if w:match("^%x%x:%x%x:%x%x:%x%x:%x%x:%x%x$") then mac = w end
+                        end
+                    end
+                end
             else
                 -- 守护进程未运行/状态文件过期：只读邻居表作为降级展示（不做任何探测）
                 local out = util.trim(util.exec("ip neigh show " .. ip .. " 2>/dev/null") or "")

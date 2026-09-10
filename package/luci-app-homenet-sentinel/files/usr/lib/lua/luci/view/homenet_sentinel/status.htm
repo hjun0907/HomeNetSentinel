@@ -199,17 +199,29 @@ col.hns-col-statew { width: 100px; }
         { id: 'about',    label: '<%:关于%>' }
     ];
 
+    function findSection(el) {
+        if (!el) return null;
+        if (el.closest) {
+            var s = el.closest('.cbi-section') || el.closest('fieldset');
+            if (s) return s;
+        }
+        // 回退：向上两层
+        return el.parentElement && el.parentElement.parentElement;
+    }
+
     function setupTabs() {
         var banner = document.getElementById('hns-banner');
         var about = document.getElementById('hns-about-wrap');
-        if (!banner || !about) return false;
+        if (!banner) { console.warn('[HNS] banner not found'); return false; }
+        if (!about) { console.warn('[HNS] about section not found (about.htm missing?)'); return false; }
 
-        var listSec = banner.closest('.cbi-section');
-        var aboutSec = about.closest('.cbi-section');
-        if (!listSec || !aboutSec) return false;
+        var listSec = findSection(banner);
+        var aboutSec = findSection(about);
+        if (!listSec || !aboutSec || listSec === aboutSec) { console.warn('[HNS] section detection failed'); return false; }
 
         var container = listSec.parentNode;
-        var sections = container.querySelectorAll('.cbi-section');
+        var sections = container.querySelectorAll('.cbi-section, fieldset');
+        if (sections.length < 2) sections = container.children;
         var panes = { list: [], settings: [], about: [] };
 
         for (var i = 0; i < sections.length; i++) {

@@ -33,6 +33,13 @@ const (
 // Version 编译时通过 -ldflags "-X main.Version=..." 注入（CI 传入包版本号）
 var Version = "dev"
 
+// 探测命令路径（initCmds 中解析，兼容不同固件）
+var (
+	ipCmd   = "/sbin/ip"
+	pingCmd = "/bin/ping"
+	cmdWarn sync.Once
+)
+
 // stateFileLogged 状态文件首次成功写出后只打一次日志
 var stateFileLogged bool
 
@@ -231,16 +238,35 @@ func probeNeighbor(ip string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_ = exec.CommandContext(ctx, "/sbin/ip", "neigh", "del", ip, "dev", neighborDev(ctx, ip)).Run()
-	_ = exec.CommandContext(ctx, "/bin/ping", "-c", "1", "-W", "1", ip).Run()
+	dev := neighborDev(ctx, ip)
+	if out, err := exec.CommandContext(ctx, ipCmd, "neigh", "del", ip, "dev", dev).CombinedOutput(); err != nil {
+		cmdWarn.Do(func() { fmt.Printf("⚠️ ip neigh del 失败: %s (%s)\n", err, strings.TrimSpace(string(out))) })
+	}
+	if out, err := exec.CommandContext(ctx, pingCmd, "-c", "1", "-W", "1", ip).CombinedOutput(); err != nil {
+		cmdWarn.Do(func() { fmt.Printf("⚠️ ping 执行失败: %s (%s)\n", err, strings.TrimSpace(string(out))) })
+	}
 	// 等待广播 ARP 探测完成（在线手机即使在省电模式也会由固件在 DTIM 内应答 ARP；
 	// 留 3 秒余量，避免偶发应答慢导致单次探测失败）
 	time.Sleep(3 * time.Second)
 }
 
+// lookCmd 在多个候选路径/命令名中查找可执行文件，兼容不同固件的路径差异
+func lookCmd(candidates ...string) string {
+	for _, c := range candidates {
+		if strings.Contains(c, "/") {
+			if _, err := os.Stat(c); err == nil {
+				return c
+			}
+		} else if p, err := exec.LookPath(c); err == nil {
+			return p
+		}
+	}
+	return candidates[0]
+}
+
 // neighborDev 解析目标所在的网络接口（如 br-lan），用于删除邻居条目
 func neighborDev(ctx context.Context, ip string) string {
-	out, err := exec.CommandContext(ctx, "/sbin/ip", "neigh", "show", ip).Output()
+	out, err := exec.CommandContext(ctx, ipCmd, "neigh", "show", ip).Output()
 	if err == nil {
 		fields := strings.Fields(string(out))
 		for i := 0; i+1 < len(fields); i++ {
@@ -254,7 +280,7 @@ func neighborDev(ctx context.Context, ip string) string {
 
 // neighborInfo 查询目标的邻居表条目，返回 NUD 状态与 MAC 地址（lladdr）
 func neighborInfo(ip string) (nud string, mac string) {
-	out, err := exec.Command("/sbin/ip", "neigh", "show", ip).Output()
+	out, err := exec.Command(ipCmd, "neigh", "show", ip).Output()
 	if err != nil {
 		return "ERROR", ""
 	}
@@ -409,6 +435,12 @@ func main() {
 	}
 
 	fmt.Printf("🚀 HomeNetSentinel v%s 启动成功\n", Version)
+
+	// 解析 ip/ping 命令的实际路径（不同固件路径可能不同）
+	ipCmd = lookCmd("/sbin/ip", "/bin/ip", "/usr/sbin/ip", "ip")
+	pingCmd = lookCmd("/bin/ping", "/sbin/ping", "/usr/bin/ping", "ping")
+	fmt.Printf("🔧 探测命令: ip=%s ping=%s\n", ipCmd, pingCmd)
+
 	cfg := config.Load()
 	if cfg.BrokerHost == "" {
 		fmt.Println("❌ broker_host is empty")
