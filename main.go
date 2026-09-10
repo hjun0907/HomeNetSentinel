@@ -30,6 +30,9 @@ const (
 	probeInterval = 8 * time.Second
 )
 
+// stateFileLogged 状态文件首次成功写出后只打一次日志
+var stateFileLogged bool
+
 // ---------- HA 发现 JSON 结构 ----------
 
 type haDevice struct {
@@ -297,12 +300,25 @@ func writeStateFile(cfg config.Config, devices map[string]deviceState) {
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
+		fmt.Println("⚠️ 状态文件序列化失败:", err)
 		return
 	}
-	_ = os.MkdirAll(filepath.Dir(stateFile), 0o755)
+	if err := os.MkdirAll(filepath.Dir(stateFile), 0o755); err != nil {
+		fmt.Println("⚠️ 状态目录创建失败:", filepath.Dir(stateFile), err)
+		return
+	}
 	tmp := stateFile + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err == nil {
-		_ = os.Rename(tmp, stateFile)
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		fmt.Println("⚠️ 状态文件写入失败:", tmp, err)
+		return
+	}
+	if err := os.Rename(tmp, stateFile); err != nil {
+		fmt.Println("⚠️ 状态文件重命名失败:", err)
+		return
+	}
+	if !stateFileLogged {
+		fmt.Printf("✅ 状态文件已写出: %s (%d 字节, %d 个目标)\n", stateFile, len(data), len(payload.Targets))
+		stateFileLogged = true
 	}
 }
 
