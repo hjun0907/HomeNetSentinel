@@ -12,6 +12,7 @@ function index()
 end
 
 -- 采集所有无线接口关联终端的信号强度，返回 { [MAC小写] = 信号dBm }
+-- 任何异常都不能让 status 接口 500（否则前端表格永远停在"检测中..."）
 local function collect_wifi_signals(util)
     local signals = {}
 
@@ -21,7 +22,9 @@ local function collect_wifi_signals(util)
         local ifs = util.exec("ls -1 /sys/class/net 2>/dev/null") or ""
         for ifname in ifs:gmatch("%S+") do
             if nixio.fs.access("/sys/class/net/" .. ifname .. "/wireless") then
-                local backend = iwinfo.type and iwinfo.type(ifname)
+                -- iwinfo.type 对异常接口可能抛错，必须 pcall
+                local backend
+                pcall(function() backend = iwinfo.type and iwinfo.type(ifname) end)
                 local iw = backend and iwinfo[backend]
                 local ok_list, list = pcall(function() return iw and iw.assoclist(ifname) end)
                 if ok_list and type(list) == "table" then
@@ -84,8 +87,10 @@ function action_status()
 
     -- 在线/离线/MAC 一律以守护进程的防抖状态文件为准（守护进程独占 ARP 探测，
     -- 本接口只读不探测，避免页面轮询删邻居条目与守护进程互相干扰导致状态抖动）
-    local daemon = read_daemon_state(util)
-    local signals = collect_wifi_signals(util)
+    local ok_d, daemon = pcall(read_daemon_state, util)
+    if not ok_d or type(daemon) ~= "table" then daemon = {} end
+    local ok_s, signals = pcall(collect_wifi_signals, util)
+    if not ok_s or type(signals) ~= "table" then signals = {} end
 
     local targets = {}
     local idx = 0

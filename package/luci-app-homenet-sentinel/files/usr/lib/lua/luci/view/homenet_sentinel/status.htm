@@ -156,9 +156,20 @@ col.hns-col-statew { width: 100px; }
         tb.innerHTML = html;
     }
 
+    var failCount = 0;
     XHR.poll(6, '<%=luci.dispatcher.build_url("admin", "services", "homenet-sentinel", "status")%>', null,
         function(_, data) {
-            if (data) render(data.targets);
+            if (data && data.targets) {
+                failCount = 0;
+                render(data.targets);
+            } else {
+                // 接口异常（HTTP 500 等）：连续 3 次失败给出提示，避免永远停在"检测中..."
+                failCount++;
+                if (failCount === 3) {
+                    var tb = document.getElementById('hns-rows');
+                    if (tb) tb.innerHTML = '<tr><td colspan="4" class="hns-empty"><%:状态获取失败，请刷新页面重试%></td></tr>';
+                }
+            }
         }
     );
 })();
