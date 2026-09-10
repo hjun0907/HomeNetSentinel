@@ -35,8 +35,12 @@ func NewClient(broker, clientID, username, password, willTopic, willPayload stri
 }
 
 // PublishRetained 以 QoS1 + retained 方式发布消息（HA 发现与状态主题均需 retained）
+// 使用 5 秒超时：QoS1 需等 broker 确认（PUBACK），若 broker 响应慢或网络抖动，
+// token.Wait() 会永久阻塞，导致主循环冻住（state.json 不再更新）。
 func PublishRetained(client mqtt.Client, topic string, payload string) error {
 	token := client.Publish(topic, 1, true, payload)
-	token.Wait()
+	if !token.WaitTimeout(5 * time.Second) {
+		return fmt.Errorf("MQTT publish 超时 (5s): %s", topic)
+	}
 	return token.Error()
 }
