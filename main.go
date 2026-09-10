@@ -172,9 +172,13 @@ type wanStatus struct {
 	IPv6PD string
 }
 
-// readUbusStatus 通过 ubus 查询 OpenWrt 网络接口状态（IPv4 地址 / IPv6-PD 前缀）
+// readUbusStatus 通过 ubus 查询 OpenWrt 网络接口状态（IPv4 地址 / IPv6-PD 前缀）。
+// 使用 3 秒硬超时：ubus 在某些环境（pppoe/snapshot）下可能长时间阻塞甚至挂死，
+// 绝不能让它卡住主循环（否则在场检测/状态文件刷新会停滞）。
 func readUbusStatus(iface string) *wanStatus {
-	out, err := exec.Command("/bin/ubus", "call", "network.interface."+iface, "status").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "/bin/ubus", "call", "network.interface."+iface, "status").Output()
 	if err != nil || len(strings.TrimSpace(string(out))) == 0 {
 		return nil
 	}
