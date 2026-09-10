@@ -53,7 +53,8 @@ end
 -- 读取守护进程写出的防抖状态文件，返回 { [IP] = { online=, mac=, nud= } }
 local function read_daemon_state(util)
     local states = {}
-    local raw = util.readfile(STATE_FILE)
+    -- 注意：luci.util 在部分 LuCI 版本没有 readfile，必须用 nixio.fs.readfile
+    local raw = nixio.fs.readfile(STATE_FILE)
     if not raw or raw == "" then
         return states
     end
